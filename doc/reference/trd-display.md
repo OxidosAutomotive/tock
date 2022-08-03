@@ -32,7 +32,7 @@ The Display HIL defines three main items that are present in all the displays:
 
 The separation between framebuffer, textbuffer and screen has been made as they may function
 as independant systems. For instance, the framebuffer could be used either for a
-screen or fopr a virtual framebuffer, while the screen could be used either for
+screen or for a virtual framebuffer, while the screen could be used either for
 graphic screens or text screens.
 
 The Display HIL is in the kernel crate, in module `hil::display`. It provides seven main
