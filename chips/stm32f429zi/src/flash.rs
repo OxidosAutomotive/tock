@@ -4,6 +4,7 @@ use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeabl
 use kernel::utilities::registers::{register_bitfields, register_structs, ReadWrite, WriteOnly};
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
+use tickv::flash_controller::FlashController;
 
 register_structs! {
     /// FLASH
@@ -122,6 +123,7 @@ const FLASH_BASE: StaticRef<FlashRegisters> =
 const SECTOR_MASK: u32 = 0x10;
 const UNLOCK_KEY1: u32 = 0x45670123;
 const UNLOCK_KEY2: u32 = 0xCDEF89AB;
+const S: usize = 16384;
 
 #[derive(Copy, Clone, Debug)]
 pub enum ProgramAccess {
@@ -146,16 +148,16 @@ pub enum State {
     MassErase,
     Programming,
 }
-pub struct Flash {
+pub struct Flash<'a> {
     registers: StaticRef<FlashRegisters>,
     flash_state: Cell<State>,
     program_access: Cell<ProgramAccess>,
-    program_buffer: TakeCell<'static, [u8; 16384]>,
+    program_buffer: TakeCell<'static, &'a [u8]>,
     program_data: Cell<(usize, usize, usize)>, // (current index, buffer len, address)
 }
 
-impl Flash {
-    pub fn new() -> Flash {
+impl<'a> Flash<'a> {
+    pub fn new() -> Flash<'a>{
         Flash {
             registers: FLASH_BASE,
             flash_state: Cell::new(State::Idle),
@@ -203,7 +205,24 @@ impl Flash {
         self.enable_interrupt(FlashInterrupt::ErrorInterrupt);
     }
 
-    pub fn sector_erase(&self, sector: u32) -> Result<(), ErrorCode> {
+    pub fn read_sector(&self, sector: usize, offset: usize, buf: &mut [u8; S]) -> Result<(), (ErrorCode, &mut [u8; S])> {
+        if self.is_locked() {
+            if !self.unlock_control_register() {
+                return Err((ErrorCode::BUSY, buf));
+            }
+        }
+        match self.flash_state.get() {
+            State::Idle => {
+                if sector >= 12 && sector <= 16 {
+                    self.flash_state.set(State::Reading(sector));
+                }
+            },
+            _ => Err((ErrorCode::BUSY, buf)),
+        }
+        Ok(())
+    }
+
+    pub fn sector_erase(&self, sector: usize) -> Result<(), ErrorCode> {
         if self.is_locked() {
             if !self.unlock_control_register() {
                 return Err(ErrorCode::BUSY);
@@ -211,8 +230,8 @@ impl Flash {
         }
         match self.flash_state.get() {
             State::Idle => {
-                self.flash_state.set(State::SectorErase(sector));
                 if sector >= 12 && sector <= 16 {
+                    self.flash_state.set(State::SectorErase(sector));
                     self.registers.cr.modify(CR::SER::SET);
                     self.registers
                         .cr
@@ -228,7 +247,7 @@ impl Flash {
         }
     }
 
-    pub fn bank_erase(&self, bank: u32) -> Result<(), ErrorCode> {
+    pub fn bank_erase(&self, bank: usize) -> Result<(), ErrorCode> {
         if self.is_locked() {
             if !self.unlock_control_register() {
                 return Err(ErrorCode::BUSY);
@@ -426,5 +445,29 @@ impl Flash {
                 self.registers.sr.modify(SR::PGSERR::SET);
             }
         }
+    }
+}
+
+impl<'a> FlashController<S> for Flash<'a> {
+    fn read_region(
+        &self,
+        region_number: usize,
+        offset: usize,
+        buf: &mut [u8; S],
+    ) -> Result<(), tickv::ErrorCode> {
+        match self.read_sector(region_number, offset, buf) {
+            Ok(()) => Ok(()),
+            Err((err, _)) => Err(err),
+        }
+    }
+
+    fn write(&self, address: usize, buf: &[u8]) -> Result<(), tickv::ErrorCode> {
+        self.program_data.set((0, buf.len(), address));
+        self.program_buffer.put(Some(&mut buf));
+        self.program_flash()
+    }
+
+    fn erase_region(&self, region_number: usize) -> Result<(), tickv::ErrorCode> {
+        self.sector_erase(region_number)
     }
 }

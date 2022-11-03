@@ -7,7 +7,7 @@ pub struct Stm32f429ziDefaultPeripherals<'a> {
     pub stm32f4: Stm32f4xxDefaultPeripherals<'a>,
     // Once implemented, place Stm32f429zi specific peripherals here
     pub trng: stm32f4xx::trng::Trng<'a>,
-    pub flash: flash::Flash,
+    pub flash: flash::Flash<'a>,
 }
 
 impl<'a> Stm32f429ziDefaultPeripherals<'a> {
