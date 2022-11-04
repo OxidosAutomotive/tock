@@ -7,7 +7,7 @@ pub struct Stm32f429ziDefaultPeripherals<'a> {
     pub stm32f4: Stm32f4xxDefaultPeripherals<'a>,
     // Once implemented, place Stm32f429zi specific peripherals here
     pub trng: stm32f4xx::trng::Trng<'a>,
-    pub flash: flash::Flash<'a>,
+    pub flash: flash::Flash,
 }
 
 impl<'a> Stm32f429ziDefaultPeripherals<'a> {
@@ -46,6 +46,12 @@ impl<'a> kernel::platform::chip::InterruptService<DeferredCallTask>
         }
     }
     unsafe fn service_deferred_call(&self, task: DeferredCallTask) -> bool {
-        self.stm32f4.service_deferred_call(task)
+        match task {
+            DeferredCallTask::Flash => {
+                self.flash.handle_interrupt();
+                true
+            },
+            _ => self.stm32f4.service_deferred_call(task)
+        }
     }
 }

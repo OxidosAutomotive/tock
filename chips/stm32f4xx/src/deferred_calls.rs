@@ -13,6 +13,7 @@ pub enum DeferredCallTask {
     Usart1 = 1,
     Usart2 = 2,
     Usart3 = 3,
+    Flash = 5,
 }
 
 impl TryFrom<usize> for DeferredCallTask {
@@ -24,6 +25,7 @@ impl TryFrom<usize> for DeferredCallTask {
             1 => Ok(DeferredCallTask::Usart1),
             2 => Ok(DeferredCallTask::Usart2),
             3 => Ok(DeferredCallTask::Usart3),
+            5 => Ok(DeferredCallTask::Flash),
             _ => Err(()),
         }
     }
