@@ -21,6 +21,9 @@ use kernel::{create_capability, debug, static_init};
 use stm32f429zi::gpio::{AlternateFunction, Mode, PinId, PortId};
 use stm32f429zi::interrupt_service::Stm32f429ziDefaultPeripherals;
 
+use stm32f429zi::flash::FlashDevice;
+use tickv::TicKV;
+
 /// Support routines for debugging I/O.
 pub mod io;
 
@@ -65,6 +68,7 @@ struct NucleoF429ZI {
 
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
+    ticvk: &'static capsules::tickv::TicKVStore<'static, >
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -561,6 +565,12 @@ pub unsafe fn main() {
     )
     .finalize(components::rng_component_static!());
 
+    // let mut read_buf: [u8; 32] = [0; 32];
+    // let tickv_capsule = TicKV::<Flash, 32>::new(peripherals.flash, &mut read_buf, 0);
+    // tickv_capsule.initialise(hashed_main_key);
+
+
+    
     // PROCESS CONSOLE
     let process_console = components::process_console::ProcessConsoleComponent::new(
         board_kernel,

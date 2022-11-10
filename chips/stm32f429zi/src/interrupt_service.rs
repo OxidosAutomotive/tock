@@ -7,7 +7,7 @@ pub struct Stm32f429ziDefaultPeripherals<'a> {
     pub stm32f4: Stm32f4xxDefaultPeripherals<'a>,
     // Once implemented, place Stm32f429zi specific peripherals here
     pub trng: stm32f4xx::trng::Trng<'a>,
-    pub flash: flash::Flash,
+    pub flash: flash::FlashDevice,
 }
 
 impl<'a> Stm32f429ziDefaultPeripherals<'a> {
@@ -20,7 +20,7 @@ impl<'a> Stm32f429ziDefaultPeripherals<'a> {
         Self {
             stm32f4: Stm32f4xxDefaultPeripherals::new(rcc, exti, dma1, dma2),
             trng: stm32f4xx::trng::Trng::new(trng_registers::RNG_BASE, rcc),
-            flash: flash::Flash::new(),
+            flash: flash::FlashDevice::new(&mut flash::FLASH_BUFFER, &mut flash::READ_BUFFER),
         }
     }
     // Necessary for setting up circular dependencies

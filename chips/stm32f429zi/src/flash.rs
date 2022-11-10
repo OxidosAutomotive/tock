@@ -6,10 +6,11 @@ use kernel::utilities::registers::{register_bitfields, register_structs, ReadWri
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 use stm32f4xx::deferred_calls::DeferredCallTask;
-use tickv::flash_controller::FlashController;
+
+use kernel::hil::flash::Flash;
 
 register_structs! {
-    /// FLASH
+    /// Flash
     FlashRegisters {
         /// Flash access control register
         (0x000 => acr: ReadWrite<u32, ACR::Register>),
@@ -134,6 +135,23 @@ const SECTOR_END: usize = 0x0810FFFF;
 const SECTOR_SIZE: usize = 0x4000;
 const S: usize = 32;
 
+pub static mut FLASH_BUFFER: [u8; SECTOR_SIZE] = [0; SECTOR_SIZE];
+pub static mut READ_BUFFER: [u8; SECTOR_SIZE] = [0; SECTOR_SIZE];
+
+pub struct Sector(pub [u8; SECTOR_SIZE]);
+
+impl Default for Sector {
+    fn default() -> Self {
+        Self([0; SECTOR_SIZE])
+    }
+}
+
+impl AsMut<[u8]> for Sector {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.0.as_mut()
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum ProgramAccess {
     Byte = 0,
@@ -157,7 +175,7 @@ pub enum State {
     MassErase,
     Programming,
 }
-pub struct Flash {
+pub struct FlashDevice {
     registers: StaticRef<FlashRegisters>,
     flash_state: Cell<State>,
     program_access: Cell<ProgramAccess>,
@@ -166,27 +184,20 @@ pub struct Flash {
     program_data: Cell<(usize, usize, usize)>, // (current index, buffer len, address)
 }
 
-impl Flash {
-    pub fn new() -> Flash{
-        Flash {
+impl FlashDevice {
+    pub fn new(
+        flash_buf: &'static mut [u8; SECTOR_SIZE],
+        read_buf: &'static mut [u8; SECTOR_SIZE],
+    ) -> FlashDevice{
+        FlashDevice {
             registers: FLASH_BASE,
             flash_state: Cell::new(State::Idle),
             program_access: Cell::new(ProgramAccess::Byte),
-            program_buffer: TakeCell::empty(),
-            read_buffer: TakeCell::empty(),
+            program_buffer: TakeCell::new(flash_buf),
+            read_buffer: TakeCell::new(read_buf),
             program_data: Cell::new((0, 0, 0)),
         }
     }
-
-    // fn wait_for(times: usize, f: impl Fn() -> bool) -> bool {
-    //     for _ in 0..times {
-    //         if f() {
-    //             return true;
-    //         }
-    //     }
-
-    //     false
-    // }
 
     pub fn init(&self) -> Result<(), ErrorCode> {
         self.enable_interrupts();
@@ -220,18 +231,23 @@ impl Flash {
         self.enable_interrupt(FlashInterrupt::ErrorInterrupt);
     }
 
-    pub fn read_sector(&self, sector: usize, offset: usize, buf: &mut [u8; S]) {
+    pub fn read_sector(&self, sector: usize, buf: &'static mut Sector) {
         self.flash_state.set(State::Reading(sector));
 
-        let mut byte: *const u8 = (SECTOR_START + sector * SECTOR_SIZE + offset) as *const u8;
+        let mut byte: *const u8 = (SECTOR_START + sector * SECTOR_SIZE) as *const u8;
         unsafe {
-            for i in 0..buf.len() {
-                buf[i] = *byte;
+            for i in 0..buf.0.len() {
+                buf.0[i] = *byte;
                 byte = byte.offset(1);
             }
         }
 
-        self.read_buffer.replace(buf);
+        self.read_buffer.map(|buffer| {
+            for i in 0..buf.0.len() {
+                buffer[i] = buf.0[i];
+            }
+        });
+        DEFERRED_CALL.set();
     }
 
     pub fn sector_erase(&self, sector: usize) {
@@ -269,7 +285,8 @@ impl Flash {
         self.registers.cr.modify(CR::PG::SET);
 
         self.program_buffer.map_or(Err(ErrorCode:: NOMEM), |buffer| {
-            let (index, _, address) = self.program_data.get();
+            let (index, _, page_number) = self.program_data.get();
+            let address = SECTOR_START + page_number * S;
             match self.program_access.get() {
                 ProgramAccess::Byte => {
                     let byte: u8 = buffer[index];
@@ -380,7 +397,7 @@ impl Flash {
                 _ => {}
             }
         }
-        if let State::Reading(sector) = self.flash_state.get() {
+        if let State::Reading(_sector) = self.flash_state.get() {
             // todo send to the client confirmation that the data was read
             // todo data is in self.read_buffer
             self.flash_state.set(State::Idle);
@@ -415,99 +432,87 @@ impl Flash {
     }
 }
 
-impl FlashController<S> for Flash {
-    fn read_region(
+impl Flash for FlashDevice {
+    type Page = Sector;
+
+    fn read_page(
         &self,
-        region_number: usize,
-        offset: usize,
-        buf: &mut [u8; S],
-    ) -> Result<(), tickv::ErrorCode> {
+        page_number: usize,
+        buf: &'static mut Self::Page,
+    ) -> Result<(), (ErrorCode, &'static mut Self::Page)> {
         if self.is_locked() {
             if !self.unlock_control_register() {
-                return Err(tickv::ErrorCode::WriteFail);
+                return Err((ErrorCode::OFF, buf));
             }
         }
-        if region_number <= 3 {
+        if page_number <= 3 {
             // todo what to do if offset + buf.len() exceed the sector and go into the next region - out of region
-            self.read_sector(region_number, offset, buf);
+            self.read_sector(page_number, buf);
             Ok(())
         } else {
-            Err(tickv::ErrorCode::ReadFail)
+            Err((ErrorCode::INVAL, buf))
         }
-        
     }
 
-    fn write(&self, address: usize, buf: &[u8]) -> Result<(), tickv::ErrorCode> {
+    fn write_page(
+        &self,
+        page_number: usize,
+        buf: &'static mut Self::Page,
+    ) -> Result<(), (ErrorCode, &'static mut Self::Page)> {
         if self.is_locked() {
             if !self.unlock_control_register() {
-                return Err(tickv::ErrorCode::WriteFail);
+                return Err((ErrorCode::OFF, buf));
             }
-        }
-        if address + buf.len() > SECTOR_END {
-            // todo return error that the size is too big
         }
         match self.flash_state.get() {
             State::Idle => {
-                self.program_data.set((0, buf.len(), address));
-                self.program_buffer.put(Some(&mut buf));
-                if self.program_flash().is_err() {
-                    return Err(tickv::ErrorCode::WriteFail);
-                } else {
-                    return Err(tickv::ErrorCode::WriteNotReady(self.compute_sector(self.program_data.get().0)));
-                }
-                    
+                self.program_data.set((0, buf.0.len(), page_number));
+                match self.program_buffer.map_or(Err(ErrorCode::NOMEM), |buffer| {
+                    for i in 0..buf.0.len() {
+                        buffer[i] = buf.0[i];
+                    }
+                    Ok(())
+                }) {
+                    Ok(_) => {
+                        match self.program_flash() {
+                            Ok(_) => {
+                               return Ok(());
+                            },
+                            Err(err) => {
+                                return Err((err, buf));
+                            },
+                        }
+                    },
+                    Err(_) => {
+                        return Err((ErrorCode::FAIL, buf));
+                    },
+                }                    
             },
-            State::Reading(_) => {
-                Ok(())
-                // return Err()
-            },
-            State::SectorErase(sector) => {
-                return Err(tickv::ErrorCode::EraseNotReady(sector));
-            },
-            State::BankErase(bank) => {
-                // todo return bank and not sector??
-                return Err(tickv::ErrorCode::EraseNotReady(bank));
-            },
-            State::MassErase => {
-                return Err(tickv::ErrorCode::EraseNotReady(0));
-            },
-            State::Programming => {
-                return Err(tickv::ErrorCode::WriteNotReady(self.compute_sector(self.program_data.get().0)));
+            _ => {
+                return Err((ErrorCode::BUSY, buf));
             }
         }
-        
     }
 
-    fn erase_region(&self, region_number: usize) -> Result<(), tickv::ErrorCode> {
+    fn erase_page(&self, page_number: usize) -> Result<(), ErrorCode> {
         if self.is_locked() {
             if !self.unlock_control_register() {
-                return Err(tickv::ErrorCode::EraseFail);
+                return Err(ErrorCode::OFF);
             }
         }
         // todo where data should the tickv capable to erase - just from sector 12 to 16?
-        if region_number >= 12 && region_number <= 16 {
+        if page_number >= 12 && page_number <= 16 {
             match self.flash_state.get() {
                 State::Idle => {
-                    self.sector_erase(region_number);
-                    Err(tickv::ErrorCode::EraseNotReady(region_number))
+                    self.sector_erase(page_number);
+                    Ok(())
                 },
-                State::Reading(_) => todo!(),
-                State::SectorErase(sector) => {
-                    return Err(tickv::ErrorCode::EraseNotReady(sector));
-                },
-                State::BankErase(bank) => {
-                    // todo return bank and not sector??
-                    return Err(tickv::ErrorCode::EraseNotReady(bank));
-                },
-                State::MassErase => {
-                    return Err(tickv::ErrorCode::EraseNotReady(0));
-                },
-                State::Programming => {
-                    return Err(tickv::ErrorCode::WriteNotReady(self.compute_sector(self.program_data.get().0)));
+                _ => {
+                    return Err(ErrorCode::BUSY);
                 }
             }
         } else {
-            Err(tickv::ErrorCode::EraseFail)
+            Err(ErrorCode::INVAL)
         }
     }
 }

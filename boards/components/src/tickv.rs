@@ -63,26 +63,28 @@ macro_rules! tickv_component_static {
 pub struct TicKVComponent<
     F: 'static + hil::flash::Flash + hil::flash::HasClient<'static, MuxFlash<'static, F>>,
     H: 'static + Hasher<'static, 8>,
+    const S: usize,
 > {
     mux_flash: &'static MuxFlash<'static, F>,
     hasher: &'static H,
     region_offset: usize,
     flash_size: usize,
-    tickfs_read_buf: &'static mut [u8; 2048],
+    tickfs_read_buf: &'static mut [u8; S],
     flash_read_buffer: &'static mut F::Page,
 }
 
 impl<
         F: 'static + hil::flash::Flash + hil::flash::HasClient<'static, MuxFlash<'static, F>>,
         H: Hasher<'static, 8>,
-    > TicKVComponent<F, H>
+        const S: usize,
+    > TicKVComponent<F, H, S>
 {
     pub fn new(
         hasher: &'static H,
         mux_flash: &'static MuxFlash<'static, F>,
         region_offset: usize,
         flash_size: usize,
-        tickfs_read_buf: &'static mut [u8; 2048],
+        tickfs_read_buf: &'static mut [u8; S],
         flash_read_buffer: &'static mut F::Page,
     ) -> Self {
         Self {
@@ -99,13 +101,14 @@ impl<
 impl<
         F: 'static + hil::flash::Flash + hil::flash::HasClient<'static, MuxFlash<'static, F>>,
         H: 'static + Hasher<'static, 8>,
-    > Component for TicKVComponent<F, H>
+        const S: usize,
+    > Component for TicKVComponent<F, H, S>
 {
     type StaticInput = (
         &'static mut MaybeUninit<FlashUser<'static, F>>,
-        &'static mut MaybeUninit<TicKVStore<'static, FlashUser<'static, F>, H>>,
+        &'static mut MaybeUninit<TicKVStore<'static, FlashUser<'static, F>, H, S>>,
     );
-    type Output = &'static TicKVStore<'static, FlashUser<'static, F>, H>;
+    type Output = &'static TicKVStore<'static, FlashUser<'static, F>, H, S>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let _grant_cap = create_capability!(capabilities::MemoryAllocationCapability);
