@@ -20,7 +20,7 @@ impl<'a> Stm32f429ziDefaultPeripherals<'a> {
         Self {
             stm32f4: Stm32f4xxDefaultPeripherals::new(rcc, exti, dma1, dma2),
             trng: stm32f4xx::trng::Trng::new(trng_registers::RNG_BASE, rcc),
-            flash: flash::FlashDevice::new(&mut flash::FLASH_BUFFER, &mut flash::READ_BUFFER),
+            flash: flash::FlashDevice::new(),
         }
     }
     // Necessary for setting up circular dependencies
@@ -37,11 +37,11 @@ impl<'a> kernel::platform::chip::InterruptService<DeferredCallTask>
             stm32f429zi_nvic::HASH_RNG => {
                 self.trng.handle_interrupt();
                 true
-            },
+            }
             stm32f4xx::nvic::FLASH => {
                 self.flash.handle_interrupt();
                 true
-            },
+            }
             _ => self.stm32f4.service_interrupt(interrupt),
         }
     }
@@ -50,8 +50,8 @@ impl<'a> kernel::platform::chip::InterruptService<DeferredCallTask>
             DeferredCallTask::Flash => {
                 self.flash.handle_interrupt();
                 true
-            },
-            _ => self.stm32f4.service_deferred_call(task)
+            }
+            _ => self.stm32f4.service_deferred_call(task),
         }
     }
 }

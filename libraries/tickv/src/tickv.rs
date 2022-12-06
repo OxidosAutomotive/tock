@@ -5,11 +5,12 @@ use crate::error_codes::ErrorCode;
 use crate::flash_controller::FlashController;
 use crate::success_codes::SuccessCode;
 use core::cell::Cell;
+use kernel::debug;
 
 /// The current version of TicKV
 pub const VERSION: u8 = 1;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum InitState {
     /// Trying to read the key from a region
     GetKeyReadRegion(usize),
@@ -21,19 +22,19 @@ pub(crate) enum InitState {
     AppendKeyReadRegion(usize),
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum KeyState {
     /// Trying to read the key from a region
     ReadRegion(usize),
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum RubbishState {
     ReadRegion(usize),
     EraseRegion(usize),
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 /// The current state machine when trying to complete a previous operation.
 /// This is used when returning from a complete async `FlashController` call.
 pub(crate) enum State {
@@ -58,6 +59,7 @@ pub struct TicKV<'a, C: FlashController<S>, const S: usize> {
     flash_size: usize,
     pub(crate) read_buffer: Cell<Option<&'a mut [u8; S]>>,
     pub(crate) state: Cell<State>,
+    counter: Cell<u32>,
 }
 
 /// This is the current object header used for TicKV objects
@@ -109,6 +111,7 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
             flash_size,
             read_buffer: Cell::new(Some(read_buffer)),
             state: Cell::new(State::None),
+            counter: Cell::new(0),
         }
     }
 
@@ -129,7 +132,10 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
             State::None => self.get_key(hashed_main_key, &mut buf),
             State::Init(state) => match state {
                 InitState::GetKeyReadRegion(_) => self.get_key(hashed_main_key, &mut buf),
-                _ => Err(ErrorCode::EraseNotReady(0)),
+                a => {
+                    debug!("nu cred ca ar trebui sa fim aici {:?}", a);
+                    Err(ErrorCode::EraseNotReady(0))
+                }
             },
             _ => unreachable!(),
         };
@@ -141,6 +147,7 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
                     ErrorCode::ReadNotReady(reg) => {
                         self.state
                             .set(State::Init(InitState::GetKeyReadRegion(reg)));
+                        // panic!("err(read not ready)");
                         Err(ErrorCode::ReadNotReady(reg))
                     }
                     _ => {
@@ -157,11 +164,13 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
 
                                 if start < (self.flash_size / S) {
                                     for r in start..(self.flash_size / S) {
+                                        // debug!("[tickv library] {}", r);
                                         match self.controller.erase_region(r) {
                                             Ok(()) => {}
                                             Err(e) => {
                                                 self.state
                                                     .set(State::Init(InitState::EraseRegion(r)));
+                                                debug!("oare unde trimitem aici?");
                                                 return Err(e);
                                             }
                                         }
@@ -169,6 +178,7 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
                                 }
 
                                 self.state.set(State::Init(InitState::EraseComplete));
+                                debug!("jofiewoifcenwocuewd");
                             }
                             _ => {}
                         }
@@ -212,12 +222,12 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
 
     // Determine the new region offset to try.
     // Returns None if there aren't any more in range.
-    fn increment_region_offset(&self, region_offset: isize) -> Option<isize> {
+    fn increment_region_offset(&self, region: usize, mut region_offset: isize) -> Option<isize> {
         let mut too_big = false;
         let mut too_small = false;
         // Loop until we find a region we can use
-        while !too_big && !too_small {
-            let new_offset = match region_offset {
+        while !too_big || !too_small {
+            region_offset = match region_offset {
                 0 => 1,
                 region_offset if region_offset > 0 => -region_offset,
                 region_offset if region_offset < 0 => -region_offset + 1,
@@ -225,17 +235,17 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
             };
 
             // Make sure our new offset is valid
-            if new_offset as usize > ((self.flash_size / S) - 1) {
+            if region + region_offset as usize > ((self.flash_size / S) - 1) {
                 too_big = true;
                 continue;
             }
 
-            if new_offset < 0 {
+            if region as isize + region_offset < 0 {
                 too_small = true;
                 continue;
             }
 
-            return Some(new_offset);
+            return Some(region_offset);
         }
 
         None
@@ -253,7 +263,7 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
         region_data: &[u8],
     ) -> Result<(usize, u16), (bool, ErrorCode)> {
         // Determine the total size of our payload
-
+        // panic!("ups");
         // Split the hash
         let hash = hash.to_ne_bytes();
 
@@ -262,6 +272,7 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
 
         loop {
             if offset + HEADER_LENGTH >= S {
+                debug!("find offset err 1");
                 // We have reached the end of the region
                 return Err((false, ErrorCode::KeyNotFound));
             }
@@ -281,6 +292,7 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
                     .ok_or((false, ErrorCode::KeyNotFound))?
                     != VERSION
                 {
+                    debug!("find offset err 2");
                     return Err((false, ErrorCode::UnsupportedVersion));
                 }
 
@@ -298,6 +310,7 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
                 // Check to see if all fields are just 0
                 if total_length == 0 {
                     // We found something invalid here
+                    debug!("find offset err 3");
                     return Err((false, ErrorCode::KeyNotFound));
                 }
 
@@ -356,6 +369,7 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
                 return Ok((offset, total_length));
             } else {
                 // We hit the end.
+                // debug!("find offset err 4");
                 return Err((!empty, ErrorCode::KeyNotFound));
             }
         }
@@ -441,8 +455,9 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
                     // Replace the buffer
                     self.read_buffer.replace(Some(region_data));
 
-                    match self.increment_region_offset(new_region) {
+                    match self.increment_region_offset(region, new_region) {
                         Some(o) => {
+                            // panic!("jfejfce");
                             region_offset = o;
                         }
                         None => {
@@ -647,12 +662,14 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
     /// If a power loss occurs before success is returned the data is
     /// assumed to be lost.
     pub fn get_key(&self, hash: u64, buf: &mut [u8]) -> Result<SuccessCode, ErrorCode> {
+        debug!("initial {:?}", self.state.get());
         let region = self.get_region(hash);
 
         let mut region_offset: isize = 0;
 
         loop {
             let mut check_sum = crc32::Crc32::new();
+            debug!("{:?}", self.state.get());
             let new_region = match self.state.get() {
                 State::None => region as isize + region_offset,
                 State::Init(state) => {
@@ -692,6 +709,7 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
 
             match self.find_key_offset(hash, region_data) {
                 Ok((offset, total_length)) => {
+                    debug!("in loop in get_key cu find_key_offset ok");
                     // Add the header data to the check hash
                     check_sum.update(
                         &region_data
@@ -758,12 +776,22 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
                     return Ok(SuccessCode::Complete);
                 }
                 Err((cont, e)) => {
+                    if self.counter.get() % 100 == 0 {
+                        debug!("in loop in get_key cu find_key_offset err {:?}", e);
+                    }
                     self.read_buffer.replace(Some(region_data));
 
                     if cont {
-                        match self.increment_region_offset(new_region) {
+                        match self.increment_region_offset(region, new_region) {
                             Some(o) => {
                                 region_offset = o;
+                                // if self.counter.get() % 100 == 0 {
+                                //     debug!("in get_key de {} ori cu offset {} si new region -> {} offset {}", self.counter.get(), region_offset, new_region, o);
+                                // }
+                                // if self.counter.get() == 900 {
+                                //     panic!("in get_key de {} ori cu offset {}", self.counter.get(), region_offset);
+                                // }
+                                // self.counter.set(self.counter.get() + 1);
                             }
                             None => {
                                 return Err(e);
@@ -847,7 +875,7 @@ impl<'a, C: FlashController<S>, const S: usize> TicKV<'a, C, S> {
                     self.read_buffer.replace(Some(region_data));
 
                     if cont {
-                        match self.increment_region_offset(new_region) {
+                        match self.increment_region_offset(region, new_region) {
                             Some(o) => {
                                 region_offset = o;
                             }

@@ -38,10 +38,10 @@ use kernel::hil::hasher::{self, Hasher};
 use kernel::hil::kv_system::{self, KVSystem};
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::utilities::leasable_buffer::LeasableMutableBuffer;
-use kernel::ErrorCode;
+use kernel::{debug, ErrorCode};
 use tickv::{self, AsyncTicKV};
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Operation {
     None,
     Init,
@@ -71,13 +71,16 @@ impl<'a, F: Flash, const S: usize> TickFSFlastCtrl<'a, F, S> {
     }
 }
 
-impl<'a, F: Flash, const S: usize> tickv::flash_controller::FlashController<S> for TickFSFlastCtrl<'a, F, S> {
+impl<'a, F: Flash, const S: usize> tickv::flash_controller::FlashController<S>
+    for TickFSFlastCtrl<'a, F, S>
+{
     fn read_region(
         &self,
         region_number: usize,
         _offset: usize,
         _buf: &mut [u8; S],
     ) -> Result<(), tickv::error_codes::ErrorCode> {
+        // debug!("TEONA READ_REG in capsules tickv {} - {}", self.region_offset, region_number);
         if self
             .flash
             .read_page(
@@ -86,8 +89,10 @@ impl<'a, F: Flash, const S: usize> tickv::flash_controller::FlashController<S> f
             )
             .is_err()
         {
+            // debug!("se ajunge aici");
             Err(tickv::error_codes::ErrorCode::ReadFail)
         } else {
+            // debug!("not ready yet");
             Err(tickv::error_codes::ErrorCode::ReadNotReady(region_number))
         }
     }
@@ -96,12 +101,13 @@ impl<'a, F: Flash, const S: usize> tickv::flash_controller::FlashController<S> f
         let data_buf = self.flash_read_buffer.take().unwrap();
 
         for (i, d) in buf.iter().enumerate() {
-            data_buf.as_mut()[i + (address % 2048)] = *d;
+            data_buf.as_mut()[i + (address % S)] = *d;
         }
 
+        // debug!("DO WE GET HERE?????? {:x}", address);
         if self
             .flash
-            .write_page(self.region_offset + (address / 2048), data_buf)
+            .write_page(self.region_offset + (address / S), data_buf)
             .is_err()
         {
             return Err(tickv::error_codes::ErrorCode::WriteFail);
@@ -111,6 +117,7 @@ impl<'a, F: Flash, const S: usize> tickv::flash_controller::FlashController<S> f
     }
 
     fn erase_region(&self, region_number: usize) -> Result<(), tickv::error_codes::ErrorCode> {
+        // debug!("TEONA erase tickv capsule {}", region_number);
         let _ = self.flash.erase_page(self.region_offset + region_number);
 
         Err(tickv::error_codes::ErrorCode::EraseNotReady(region_number))
@@ -132,6 +139,8 @@ pub struct TicKVStore<'a, F: Flash + 'static, H: Hasher<'a, 8>, const S: usize> 
     key_buf: TakeCell<'static, [u8; 8]>,
 
     client: OptionalCell<&'a dyn kv_system::Client<TicKVKeyType>>,
+
+    counter: Cell<u32>,
 }
 
 impl<'a, F: Flash, const S: usize, H: Hasher<'a, 8>> TicKVStore<'a, F, H, S> {
@@ -160,15 +169,18 @@ impl<'a, F: Flash, const S: usize, H: Hasher<'a, 8>> TicKVStore<'a, F, H, S> {
             unhashed_key_buf: TakeCell::empty(),
             key_buf: TakeCell::empty(),
             client: OptionalCell::empty(),
+            counter: Cell::new(0),
         }
     }
 
     pub fn initialise(&self) {
+        debug!("Initialise tickv capsule");
         let _ret = self.tickv.initialise(0x7bc9f7ff4f76f244);
         self.operation.set(Operation::Init);
     }
 
     fn complete_init(&self) {
+        debug!("TEONA 2 init ready");
         self.operation.set(Operation::None);
         match self.next_operation.get() {
             Operation::None | Operation::Init => {}
@@ -231,6 +243,7 @@ impl<'a, F: Flash, const S: usize, H: Hasher<'a, 8>> hasher::Client<8> for TicKV
 
     fn hash_done(&self, _result: Result<(), ErrorCode>, digest: &'static mut [u8; 8]) {
         self.client.map(move |cb| {
+            // debug!("TEONA 4.4 callback tickv -> store");
             cb.generate_key_complete(Ok(()), self.unhashed_key_buf.take().unwrap(), digest);
         });
 
@@ -240,14 +253,17 @@ impl<'a, F: Flash, const S: usize, H: Hasher<'a, 8>> hasher::Client<8> for TicKV
 
 impl<'a, F: Flash, const S: usize, H: Hasher<'a, 8>> flash::Client<F> for TicKVStore<'a, F, H, S> {
     fn read_complete(&self, pagebuffer: &'static mut F::Page, _error: flash::Error) {
+        // debug!("TICKV capsule read_complete");
         self.tickv.set_read_buffer(pagebuffer.as_mut());
         self.tickv
             .tickv
             .controller
             .flash_read_buffer
             .replace(pagebuffer);
+        // panic!("ofdesn");
         let (ret, buf_buffer) = self.tickv.continue_operation();
 
+        // panic!("TICKV capsule {:?} si {:?}", self.operation.get(), ret);
         buf_buffer.map(|buf| {
             self.ret_buffer.replace(buf);
         });
@@ -313,6 +329,7 @@ impl<'a, F: Flash, const S: usize, H: Hasher<'a, 8>> flash::Client<F> for TicKVS
     }
 
     fn write_complete(&self, pagebuffer: &'static mut F::Page, _error: flash::Error) {
+        // debug!("TICKV capsule write_complete");
         self.tickv
             .tickv
             .controller
@@ -344,8 +361,10 @@ impl<'a, F: Flash, const S: usize, H: Hasher<'a, 8>> flash::Client<F> for TicKVS
     }
 
     fn erase_complete(&self, _error: flash::Error) {
+        // debug!("TICKV capsule erase_complete");
         let (ret, buf_buffer) = self.tickv.continue_operation();
 
+        debug!("TICKV capsule {:?} si {:?}", self.operation.get(), ret);
         buf_buffer.map(|buf| {
             self.ret_buffer.replace(buf);
         });
@@ -356,7 +375,9 @@ impl<'a, F: Flash, const S: usize, H: Hasher<'a, 8>> flash::Client<F> for TicKVS
                 | Ok(tickv::success_codes::SuccessCode::Written) => {
                     self.complete_init();
                 }
-                _ => {}
+                _ => {
+                    debug!("capsule tickv do nothing");
+                }
             },
             Operation::GarbageCollect => match ret {
                 Ok(tickv::success_codes::SuccessCode::Complete)
@@ -370,6 +391,10 @@ impl<'a, F: Flash, const S: usize, H: Hasher<'a, 8>> flash::Client<F> for TicKVS
             },
             _ => unreachable!(),
         }
+        if self.counter.get() == 3 {
+            panic!("mori si aici");
+        }
+        self.counter.set(self.counter.get() + 1);
     }
 }
 
@@ -392,13 +417,14 @@ impl<'a, F: Flash, const S: usize, H: Hasher<'a, 8>> KVSystem<'a> for TicKVStore
             Result<(), ErrorCode>,
         ),
     > {
+        // debug!("TEONA 2 {:?}", unhashed_key);
         if let Err((e, buf)) = self
             .hasher
             .add_mut_data(LeasableMutableBuffer::new(unhashed_key))
         {
             return Err((buf, key_buf, Err(e)));
         }
-
+        // debug!("TEONA 3 {:?}", key_buf);
         self.key_buf.replace(key_buf);
 
         Ok(())
@@ -416,6 +442,7 @@ impl<'a, F: Flash, const S: usize, H: Hasher<'a, 8>> KVSystem<'a> for TicKVStore
             Result<(), kernel::ErrorCode>,
         ),
     > {
+        // debug!("TEONA 6");
         match self.operation.get() {
             Operation::None => {
                 self.operation.set(Operation::AppendKey);
@@ -438,6 +465,7 @@ impl<'a, F: Flash, const S: usize, H: Hasher<'a, 8>> KVSystem<'a> for TicKVStore
             Operation::Init => {
                 // The init process is still occurring.
                 // We can save this request and start it after init
+                // debug!("TEONA 1 - tickv");
                 self.next_operation.set(Operation::AppendKey);
                 self.key_buffer.replace(key);
                 self.value_buffer.replace(Some(value));
@@ -468,6 +496,7 @@ impl<'a, F: Flash, const S: usize, H: Hasher<'a, 8>> KVSystem<'a> for TicKVStore
 
                 match self.tickv.get_key(u64::from_le_bytes(*key), ret_buf) {
                     Ok(_ret) => {
+                        debug!("{:?}", key);
                         self.key_buffer.replace(key);
                         Ok(())
                     }

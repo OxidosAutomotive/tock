@@ -129,6 +129,8 @@ use crate::success_codes::SuccessCode;
 use crate::tickv::{State, TicKV};
 use core::cell::Cell;
 
+use kernel::debug;
+
 /// The return type from the continue operation
 type ContinueReturn = (
     // Result
@@ -301,8 +303,14 @@ impl<'a, C: FlashController<S>, const S: usize> AsyncTicKV<'a, C, S> {
     ///        An option of the buf buffer used
     /// The buffers will only be returned on a non async error or on success.
     pub fn continue_operation(&self) -> ContinueReturn {
+        debug!("{:?} ", self.tickv.state.get());
         let ret = match self.tickv.state.get() {
-            State::Init(_) => self.tickv.initialise(self.key.get().unwrap()),
+            State::Init(_) => {
+                debug!("before initialise async ops");
+                let r = self.tickv.initialise(self.key.get().unwrap());
+                debug!("after initialise async ops");
+                r
+            }
             State::AppendKey(_) => {
                 let value = self.value.take().unwrap();
                 let ret = self.tickv.append_key(self.key.get().unwrap(), value);
@@ -322,6 +330,8 @@ impl<'a, C: FlashController<S>, const S: usize> AsyncTicKV<'a, C, S> {
             },
             _ => unreachable!(),
         };
+
+        debug!("[undeva in async ops] {:?}", ret);
 
         match ret {
             Ok(_) => {

@@ -13,7 +13,7 @@ use kernel::hil::kv_system;
 use kernel::processbuffer::{ReadableProcessBuffer, WriteableProcessBuffer};
 use kernel::syscall::{CommandReturn, SyscallDriver};
 use kernel::utilities::cells::{OptionalCell, TakeCell};
-use kernel::{ErrorCode, ProcessId};
+use kernel::{debug, ErrorCode, ProcessId};
 
 /// Ids for read-only allow buffers
 mod ro_allow {
@@ -323,6 +323,7 @@ impl<'a, K: kv_system::KVSystem<'a, K = T>, T: kv_system::KeyType> kv_system::St
         key: &'static mut [u8],
         value: &'static mut [u8],
     ) {
+        debug!("FINAL set_complete driver");
         self.data_buffer.replace(key);
         self.dest_buffer.replace(value);
 

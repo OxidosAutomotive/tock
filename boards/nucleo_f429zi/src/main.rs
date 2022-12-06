@@ -21,6 +21,9 @@ use kernel::{create_capability, debug, static_init};
 use stm32f429zi::gpio::{AlternateFunction, Mode, PinId, PortId};
 use stm32f429zi::interrupt_service::Stm32f429ziDefaultPeripherals;
 
+use kernel::hil::flash::HasClient;
+use kernel::hil::hasher::Hasher;
+use kernel::hil::kv_system::KVSystem;
 use stm32f429zi::flash::FlashDevice;
 use tickv::TicKV;
 
@@ -44,8 +47,10 @@ const FAULT_RESPONSE: kernel::process::PanicFaultPolicy = kernel::process::Panic
 /// Dummy buffer that causes the linker to reserve enough space for the stack.
 #[no_mangle]
 #[link_section = ".stack_buffer"]
-pub static mut STACK_MEMORY: [u8; 0x2000] = [0; 0x2000];
+pub static mut STACK_MEMORY: [u8; 0x10000] = [0; 0x10000];
 
+// Test access to SipHash
+static mut SIPHASH: Option<&capsules::sip_hash::SipHasher24<'static>> = None;
 /// A structure representing this platform that holds references to all
 /// capsules for this platform.
 struct NucleoF429ZI {
@@ -68,7 +73,16 @@ struct NucleoF429ZI {
 
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
-    ticvk: &'static capsules::tickv::TicKVStore<'static, >
+    kv_driver: &'static capsules::kv_driver::KVSystemDriver<
+        'static,
+        capsules::tickv::TicKVStore<
+            'static,
+            capsules::virtual_flash::FlashUser<'static, stm32f429zi::flash::FlashDevice>,
+            capsules::sip_hash::SipHasher24<'static>,
+            { stm32f429zi::flash::SECTOR_SIZE },
+        >,
+        [u8; 8],
+    >,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -87,6 +101,7 @@ impl SyscallDriverLookup for NucleoF429ZI {
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             capsules::gpio::DRIVER_NUM => f(Some(self.gpio)),
             capsules::rng::DRIVER_NUM => f(Some(self.rng)),
+            capsules::kv_driver::DRIVER_NUM => f(Some(self.kv_driver)),
             _ => f(None),
         }
     }
@@ -245,7 +260,11 @@ unsafe fn set_pin_primary_functions(
 }
 
 /// Helper function for miscellaneous peripheral functions
-unsafe fn setup_peripherals(tim2: &stm32f429zi::tim2::Tim2, trng: &stm32f429zi::trng::Trng) {
+unsafe fn setup_peripherals(
+    tim2: &stm32f429zi::tim2::Tim2,
+    trng: &stm32f429zi::trng::Trng,
+    flash: &stm32f429zi::flash::FlashDevice,
+) {
     // USART3 IRQn is 39
     cortexm4::nvic::Nvic::new(stm32f429zi::nvic::USART3).enable();
 
@@ -256,6 +275,10 @@ unsafe fn setup_peripherals(tim2: &stm32f429zi::tim2::Tim2, trng: &stm32f429zi::
 
     // RNG
     trng.enable_clock();
+
+    // Flash
+    let _ = flash.init();
+    flash.enable_interrupts();
 }
 
 /// Statically initialize the core peripherals for the chip.
@@ -300,7 +323,11 @@ pub unsafe fn main() {
     peripherals.init();
     let base_peripherals = &peripherals.stm32f4;
 
-    setup_peripherals(&base_peripherals.tim2, &peripherals.trng);
+    setup_peripherals(
+        &base_peripherals.tim2,
+        &peripherals.trng,
+        &peripherals.flash,
+    );
 
     set_pin_primary_functions(syscfg, &base_peripherals.gpio_ports);
 
@@ -313,7 +340,7 @@ pub unsafe fn main() {
     let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(&PROCESSES));
 
     let dynamic_deferred_call_clients =
-        static_init!([DynamicDeferredCallClientState; 2], Default::default());
+        static_init!([DynamicDeferredCallClientState; 3], Default::default());
     let dynamic_deferred_caller = static_init!(
         DynamicDeferredCall,
         DynamicDeferredCall::new(dynamic_deferred_call_clients)
@@ -569,8 +596,6 @@ pub unsafe fn main() {
     // let tickv_capsule = TicKV::<Flash, 32>::new(peripherals.flash, &mut read_buf, 0);
     // tickv_capsule.initialise(hashed_main_key);
 
-
-    
     // PROCESS CONSOLE
     let process_console = components::process_console::ProcessConsoleComponent::new(
         board_kernel,
@@ -582,6 +607,83 @@ pub unsafe fn main() {
         stm32f429zi::tim2::Tim2
     ));
     let _ = process_console.start();
+
+    let flash_buffer = static_init!(
+        [u8; stm32f429zi::flash::SECTOR_SIZE],
+        [0; stm32f429zi::flash::SECTOR_SIZE]
+    );
+    let page_buffer = static_init!(
+        stm32f429zi::flash::Sector,
+        stm32f429zi::flash::Sector::default()
+    );
+    let mux_flash = components::flash::FlashMuxComponent::new(&peripherals.flash).finalize(
+        components::flash_mux_component_static!(stm32f429zi::flash::FlashDevice),
+    );
+    let sip_hash = static_init!(
+        capsules::sip_hash::SipHasher24,
+        capsules::sip_hash::SipHasher24::new(dynamic_deferred_caller)
+    );
+    sip_hash.initialise(
+        dynamic_deferred_caller
+            .register(sip_hash)
+            .expect("dynamic deferred caller out of slots for sip_hash"),
+    );
+    SIPHASH = Some(sip_hash);
+
+    let tickv = components::tickv::TicKVComponent::new(
+        sip_hash,
+        &mux_flash,
+        0,
+        stm32f429zi::flash::SECTOR_COUNT * stm32f429zi::flash::SECTOR_SIZE,
+        flash_buffer,
+        page_buffer,
+    )
+    .finalize(components::tickv_component_static!(
+        stm32f429zi::flash::FlashDevice,
+        capsules::sip_hash::SipHasher24,
+        { stm32f429zi::flash::SECTOR_SIZE }
+    ));
+
+    HasClient::set_client(&peripherals.flash, mux_flash);
+    sip_hash.set_client(tickv);
+    //    // tickv.initialise();
+    let mux_kv = components::kv_system::KVStoreMuxComponent::new(tickv).finalize(
+        components::kv_store_mux_component_static!(
+            capsules::tickv::TicKVStore<
+                capsules::virtual_flash::FlashUser<stm32f429zi::flash::FlashDevice>,
+                capsules::sip_hash::SipHasher24<'static>,
+                { stm32f429zi::flash::SECTOR_SIZE },
+            >,
+            capsules::tickv::TicKVKeyType
+        ),
+    );
+
+    let kv_store = components::kv_system::KVStoreComponent::new(mux_kv).finalize(
+        components::kv_store_component_static!(
+            capsules::tickv::TicKVStore<
+                capsules::virtual_flash::FlashUser<stm32f429zi::flash::FlashDevice>,
+                capsules::sip_hash::SipHasher24<'static>,
+                { stm32f429zi::flash::SECTOR_SIZE },
+            >,
+            capsules::tickv::TicKVKeyType
+        ),
+    );
+
+    tickv.set_client(kv_store);
+
+    let kv_driver = components::kv_system::KVDriverComponent::new(
+        kv_store,
+        board_kernel,
+        capsules::kv_driver::DRIVER_NUM,
+    )
+    .finalize(components::kv_driver_component_static!(
+        capsules::tickv::TicKVStore<
+            capsules::virtual_flash::FlashUser<stm32f429zi::flash::FlashDevice>,
+            capsules::sip_hash::SipHasher24<'static>,
+            { stm32f429zi::flash::SECTOR_SIZE },
+        >,
+        capsules::tickv::TicKVKeyType,
+    ));
 
     let scheduler = components::sched::round_robin::RoundRobinComponent::new(&PROCESSES)
         .finalize(components::round_robin_component_static!(NUM_PROCS));
@@ -603,6 +705,7 @@ pub unsafe fn main() {
 
         scheduler,
         systick: cortexm4::systick::SysTick::new(),
+        kv_driver,
     };
 
     // // Optional kernel tests

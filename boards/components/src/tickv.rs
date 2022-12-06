@@ -46,13 +46,14 @@ use kernel::hil::hasher::Hasher;
 // Setup static space for the objects.
 #[macro_export]
 macro_rules! tickv_component_static {
-    ($F:ty, $H:ty) => {{
+    ($F:ty, $H:ty, $S:expr) => {{
         let flash = kernel::static_buf!(capsules::virtual_flash::FlashUser<'static, $F>);
         let tickv = kernel::static_buf!(
             capsules::tickv::TicKVStore<
                 'static,
                 capsules::virtual_flash::FlashUser<'static, $F>,
                 $H,
+                $S,
             >
         );
 

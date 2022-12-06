@@ -34,7 +34,7 @@ use kernel::collections::list::{List, ListLink, ListNode};
 use kernel::hil::kv_system::{self, KVSystem};
 use kernel::storage_permissions::StoragePermissions;
 use kernel::utilities::cells::{OptionalCell, TakeCell};
-use kernel::ErrorCode;
+use kernel::{debug, ErrorCode};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Operation {
@@ -122,6 +122,7 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType> KVStore<'a, K, T> {
     }
 
     pub fn set_client(&self, client: &'a dyn kv_system::StoreClient<T>) {
+        debug!("set_client in kv_store");
         self.client.set(client);
     }
 
@@ -206,6 +207,7 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType> KVStore<'a, K, T> {
             self.mux_kv.operation.set(Operation::Set);
 
             if let Some(Err((unhashed_key, e))) = self.hashed_key.take().map(|buf| {
+                // debug!("TEONA 1 store");
                 if let Err((unhashed_key, hashed_key, e)) =
                     self.mux_kv.kv.generate_key(unhashed_key, buf)
                 {
@@ -287,6 +289,7 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType + core::fmt::Debug> kv_sy
         unhashed_key: &'static mut [u8],
         hashed_key: &'static mut T,
     ) {
+        // debug!("TEONA ?????");
         self.unhashed_key.replace(unhashed_key);
 
         self.mux_kv.operation.map(|op| {
@@ -315,6 +318,7 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType + core::fmt::Debug> kv_sy
                     }
                 });
             } else {
+                // debug!("TEONA 5.0 ok");
                 match op {
                     Operation::Get => {
                         self.value.take().map(|value| {
@@ -332,12 +336,15 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType + core::fmt::Debug> kv_sy
                     }
                     Operation::Set => {
                         self.value.take().map(|value| {
+                            // debug!("TEONA 5.1");
                             if let Err((key, value, e)) =
                                 self.mux_kv.kv.append_key(hashed_key, value)
                             {
+                                // debug!("TEONA 5.2");
                                 self.hashed_key.replace(key);
                                 self.unhashed_key.take().map(|unhashed_key| {
                                     self.client.map(move |cb| {
+                                        // debug!("TEONA 5.25");
                                         cb.set_complete(e, unhashed_key, value);
                                     });
                                 });
@@ -361,7 +368,7 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType + core::fmt::Debug> kv_sy
                 }
             }
         });
-
+        // debug!("TEONA 5.2 before run next op");
         self.mux_kv.do_next_op();
     }
 
@@ -371,6 +378,7 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType + core::fmt::Debug> kv_sy
         key: &'static mut T,
         value: &'static mut [u8],
     ) {
+        // debug!("TEONA ? append_key_complete");
         self.hashed_key.replace(key);
         self.value.replace(value);
 
@@ -380,6 +388,7 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType + core::fmt::Debug> kv_sy
                 self.unhashed_key.take().map(|unhashed_key| {
                     self.value.take().map(|value| {
                         self.client.map(move |cb| {
+                            // debug!("TEONA 5.2 up_call store -> driver");
                             cb.set_complete(result, unhashed_key, value);
                         });
                     });
@@ -521,7 +530,9 @@ impl<'a, K: KVSystem<'a> + KVSystem<'a, K = T>, T: 'static + kv_system::KeyType>
     }
 
     fn do_next_op(&self) {
+        // debug!("TEONA do_next_op");
         if self.operation.is_some() {
+            // debug!("TEONA WHAT?");
             return;
         }
 
@@ -550,11 +561,13 @@ impl<'a, K: KVSystem<'a> + KVSystem<'a, K = T>, T: 'static + kv_system::KeyType>
                                 }
                             }
                             Operation::Set => {
+                                // debug!("TEONA 5.20 after run next op");
                                 if let Err((unhashed_key, hashed_key, e)) =
                                     self.kv.generate_key(unhashed_key, hashed_key)
                                 {
                                     node.hashed_key.replace(hashed_key);
                                     node.value.take().map(|value| {
+                                        // debug!("TEONA 5.1 up_call store -> driver");
                                         node.client.map(move |cb| {
                                             cb.set_complete(e, unhashed_key, value);
                                         });

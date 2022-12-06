@@ -1,13 +1,13 @@
 use core::cell::Cell;
 use kernel::deferred_call::DeferredCall;
-use kernel::utilities::cells::{TakeCell, VolatileCell};
+use kernel::utilities::cells::{OptionalCell, TakeCell, VolatileCell};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::utilities::registers::{register_bitfields, register_structs, ReadWrite, WriteOnly};
 use kernel::utilities::StaticRef;
-use kernel::ErrorCode;
+use kernel::{debug, ErrorCode};
 use stm32f4xx::deferred_calls::DeferredCallTask;
 
-use kernel::hil::flash::Flash;
+use kernel::hil::flash::{Client, Error, Flash, HasClient};
 
 register_structs! {
     /// Flash
@@ -123,32 +123,41 @@ register_bitfields![u32,
 const FLASH_BASE: StaticRef<FlashRegisters> =
     unsafe { StaticRef::new(0x40023C00 as *const FlashRegisters) };
 
-static DEFERRED_CALL: DeferredCall<DeferredCallTask> = unsafe {
-    DeferredCall::new(DeferredCallTask::Flash)
-};
+static DEFERRED_CALL: DeferredCall<DeferredCallTask> =
+    unsafe { DeferredCall::new(DeferredCallTask::Flash) };
 
-const SECTOR_MASK: u32 = 0x10;
+const SECTOR_PADDING: u32 = 0b10000;
 const UNLOCK_KEY1: u32 = 0x45670123;
 const UNLOCK_KEY2: u32 = 0xCDEF89AB;
+
 const SECTOR_START: usize = 0x08100000;
-const SECTOR_END: usize = 0x0810FFFF;
-const SECTOR_SIZE: usize = 0x4000;
-const S: usize = 32;
+pub const SECTOR_SIZE: usize = 0x4000;
+// const S: usize = 32;
+pub const SECTOR_COUNT: usize = 4;
 
-pub static mut FLASH_BUFFER: [u8; SECTOR_SIZE] = [0; SECTOR_SIZE];
-pub static mut READ_BUFFER: [u8; SECTOR_SIZE] = [0; SECTOR_SIZE];
+// pub static mut FLASH_BUFFER: [u8; SECTOR_SIZE] = [0; SECTOR_SIZE];
+// pub static mut READ_BUFFER: [u8; SECTOR_SIZE] = [0; SECTOR_SIZE];
 
+#[derive(Debug)]
 pub struct Sector(pub [u8; SECTOR_SIZE]);
+
+impl Sector {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
 
 impl Default for Sector {
     fn default() -> Self {
-        Self([0; SECTOR_SIZE])
+        Self {
+            0: [0; SECTOR_SIZE],
+        }
     }
 }
 
 impl AsMut<[u8]> for Sector {
     fn as_mut(&mut self) -> &mut [u8] {
-        self.0.as_mut()
+        &mut self.0
     }
 }
 
@@ -177,25 +186,24 @@ pub enum State {
 }
 pub struct FlashDevice {
     registers: StaticRef<FlashRegisters>,
+    flash_client: OptionalCell<&'static dyn Client<FlashDevice>>,
     flash_state: Cell<State>,
     program_access: Cell<ProgramAccess>,
-    program_buffer: TakeCell<'static, [u8]>,
-    read_buffer: TakeCell<'static, [u8]>,
-    program_data: Cell<(usize, usize, usize)>, // (current index, buffer len, address)
+    program_buffer: TakeCell<'static, Sector>,
+    read_buffer: TakeCell<'static, Sector>,
+    program_data: Cell<(usize, usize, usize)>, // (current index, buffer len, page_number)
 }
 
 impl FlashDevice {
-    pub fn new(
-        flash_buf: &'static mut [u8; SECTOR_SIZE],
-        read_buf: &'static mut [u8; SECTOR_SIZE],
-    ) -> FlashDevice{
+    pub fn new() -> FlashDevice {
         FlashDevice {
             registers: FLASH_BASE,
             flash_state: Cell::new(State::Idle),
-            program_access: Cell::new(ProgramAccess::Byte),
-            program_buffer: TakeCell::new(flash_buf),
-            read_buffer: TakeCell::new(read_buf),
+            program_access: Cell::new(ProgramAccess::Word),
+            program_buffer: TakeCell::empty(),
+            read_buffer: TakeCell::empty(),
             program_data: Cell::new((0, 0, 0)),
+            flash_client: OptionalCell::empty(),
         }
     }
 
@@ -203,16 +211,15 @@ impl FlashDevice {
         self.enable_interrupts();
         if self.is_locked() {
             if self.unlock_control_register() {
+                // self.registers.acr.modify(ACR::DCEN::SET);
+                // self.registers.acr.modify(ACR::ICEN::SET);
+                // self.registers.acr.modify(ACR::PRFTEN::SET);
                 return Ok(());
             } else {
                 return Err(ErrorCode::ALREADY);
             }
         }
         Err(ErrorCode::ALREADY)
-    }
-
-    pub fn compute_sector(&self, address: usize) -> usize {
-        ((address - SECTOR_START) / SECTOR_SIZE ) + 12
     }
 
     pub fn is_locked(&self) -> bool {
@@ -233,36 +240,45 @@ impl FlashDevice {
 
     pub fn read_sector(&self, sector: usize, buf: &'static mut Sector) {
         self.flash_state.set(State::Reading(sector));
-
+        // debug!("TEONA setam state la reading {}", sector);
         let mut byte: *const u8 = (SECTOR_START + sector * SECTOR_SIZE) as *const u8;
+        // debug!("TEONA pornim de la adresa {:x} pana la {:x}", (SECTOR_START + sector * SECTOR_SIZE), (SECTOR_START + sector * SECTOR_SIZE) + buf.0.len());
         unsafe {
-            for i in 0..buf.0.len() {
+            for i in 0..buf.len() {
                 buf.0[i] = *byte;
                 byte = byte.offset(1);
             }
         }
 
-        self.read_buffer.map(|buffer| {
-            for i in 0..buf.0.len() {
-                buffer[i] = buf.0[i];
-            }
-        });
+        self.read_buffer.replace(buf);
         DEFERRED_CALL.set();
     }
 
     pub fn sector_erase(&self, sector: usize) {
-        self.flash_state.set(State::SectorErase(sector));
-        self.registers.cr.modify(CR::SER::SET);
-        self.registers
-            .cr
-            .modify(CR::SNB.val(SECTOR_MASK | (sector as u32 - 12)));
-
-        self.registers.cr.modify(CR::STRT::SET);
+        debug!(
+            "The value of acr latency is {}",
+            self.registers.acr.read(ACR::LATENCY)
+        );
+        if !self.registers.sr.is_set(SR::BSY) {
+            self.flash_state.set(State::SectorErase(sector));
+            let val: u32 = SECTOR_PADDING + (sector as u32);
+            debug!(
+                "[DRIVER] setam state la erase {} si sectorul {}, addresa {:x}, psize este {}",
+                sector,
+                val,
+                SECTOR_START + sector * SECTOR_SIZE,
+                self.program_access.get() as u32
+            );
+            self.registers.cr.modify(
+                CR::PSIZE.val(self.program_access.get() as u32) + CR::SNB.val(val) + CR::SER::SET,
+            );
+            self.registers.cr.modify(CR::STRT::SET);
+        }
     }
 
-    // todo ensure bank is valid before calling bank_erase
     pub fn bank_erase(&self, bank: usize) {
         self.flash_state.set(State::BankErase(bank));
+        // debug!("TEONA setam state la erase bank {}", bank);
         if bank == 0 {
             self.registers.cr.modify(CR::MER::SET);
         } else {
@@ -273,59 +289,62 @@ impl FlashDevice {
 
     pub fn mass_erase(&self) {
         self.flash_state.set(State::MassErase);
+        // debug!("TEONA setam state la mass erase");
         self.registers.cr.modify(CR::MER::SET);
         self.registers.cr.modify(CR::MER1::SET);
 
         self.registers.cr.modify(CR::STRT::SET);
     }
 
-    pub fn program_flash(&self) -> Result<(), ErrorCode> {
-        
+    pub fn program_flash(&self) {
         self.flash_state.set(State::Programming);
+        // debug!("TEONA setam state la programming");
+        self.registers
+            .cr
+            .modify(CR::PSIZE.val(self.program_access.get() as u32));
         self.registers.cr.modify(CR::PG::SET);
 
-        self.program_buffer.map_or(Err(ErrorCode:: NOMEM), |buffer| {
+        self.program_buffer.map(|buffer| {
             let (index, _, page_number) = self.program_data.get();
-            let address = SECTOR_START + page_number * S;
+            let address = SECTOR_START + page_number * SECTOR_SIZE;
             match self.program_access.get() {
                 ProgramAccess::Byte => {
-                    let byte: u8 = buffer[index];
+                    let byte: u8 = buffer.0[index];
                     let program_address =
                         unsafe { &*((address + index) as *const VolatileCell<u8>) };
                     program_address.set(byte);
                 }
                 ProgramAccess::HalfWord => {
                     let halfword: u16 =
-                        (buffer[index] as u16) | (buffer[index + 1] as u16) << 8;
+                        (buffer.0[index] as u16) | (buffer.0[index + 1] as u16) << 8;
                     let program_address =
                         unsafe { &*((address + index) as *const VolatileCell<u16>) };
                     program_address.set(halfword);
                 }
                 ProgramAccess::Word => {
-                    let word: u32 = (buffer[index] as u32) << 16
-                        | (buffer[index + 1] as u32) << 24
-                        | (buffer[index + 2] as u32)
-                        | (buffer[index + 3] as u32) << 8;
+                    let word: u32 = (buffer.0[index] as u32) << 16
+                        | (buffer.0[index + 1] as u32) << 24
+                        | (buffer.0[index + 2] as u32)
+                        | (buffer.0[index + 3] as u32) << 8;
                     let program_address =
                         unsafe { &*((address + index) as *const VolatileCell<u32>) };
                     program_address.set(word);
                 }
                 ProgramAccess::DoubleWord => {
-                    let doubleword: u64 = (buffer[index] as u64) << 48
-                        | (buffer[index + 1] as u64) << 56
-                        | (buffer[index + 2] as u64) << 32
-                        | (buffer[index + 3] as u64) << 40
-                        | (buffer[index + 4] as u64) << 16
-                        | (buffer[index + 5] as u64) << 24
-                        | (buffer[index + 6] as u64)
-                        | (buffer[index + 7] as u64) << 8;
+                    let doubleword: u64 = (buffer.0[index] as u64) << 48
+                        | (buffer.0[index + 1] as u64) << 56
+                        | (buffer.0[index + 2] as u64) << 32
+                        | (buffer.0[index + 3] as u64) << 40
+                        | (buffer.0[index + 4] as u64) << 16
+                        | (buffer.0[index + 5] as u64) << 24
+                        | (buffer.0[index + 6] as u64)
+                        | (buffer.0[index + 7] as u64) << 8;
                     let program_address =
                         unsafe { &*((address + index) as *const VolatileCell<u64>) };
                     program_address.set(doubleword);
                 }
             }
-            Ok(())
-        })    
+        });
     }
 
     pub fn unlock_control_register(&self) -> bool {
@@ -339,21 +358,34 @@ impl FlashDevice {
     }
 
     pub fn handle_interrupt(&self) {
+        debug!(
+            "[DRIVER] handle interrupt chips {:?} {:x} {:x} {:x}",
+            self.flash_state.get(),
+            self.registers.optcr.get(),
+            self.registers.sr.get(),
+            self.registers.cr.get()
+        );
+
         if self.registers.sr.is_set(SR::EOP) {
+            // debug!("We have end of operation");
             // handle the interrupt
             self.registers.sr.modify(SR::EOP::SET);
 
             // End of Operation
             match self.flash_state.get() {
                 State::SectorErase(_sector) => {
-                    // todo send to the client confirmation that the sector erase is done
-                    if self.registers.cr.is_set(CR::SER) {
-                        self.registers.cr.modify(CR::SER::CLEAR);
-                    }
+                    // debug!("[DRIVER] sector erased {}", _sector);
+                    self.registers
+                        .cr
+                        .modify(CR::SNB.val(0) + CR::STRT::CLEAR + CR::SER::CLEAR);
+
+                    // debug!("TEONA setam state la idle 1");
                     self.flash_state.set(State::Idle);
+                    self.flash_client.map(|client| {
+                        client.erase_complete(Error::CommandComplete);
+                    });
                 }
                 State::BankErase(bank) => {
-                    // todo send to the client confirmation that the bank erase is done
                     if bank == 0 {
                         if self.registers.cr.is_set(CR::MER) {
                             self.registers.cr.modify(CR::MER::CLEAR);
@@ -364,17 +396,24 @@ impl FlashDevice {
                             self.registers.cr.modify(CR::MER1::CLEAR);
                         }
                     }
+                    // debug!("TEONA setam state la idle 2");
                     self.flash_state.set(State::Idle);
+                    self.flash_client.map(|client| {
+                        client.erase_complete(Error::CommandComplete);
+                    });
                 }
                 State::MassErase => {
-                    // todo send to the client confirmation that the mass erase is done
                     if self.registers.cr.is_set(CR::MER) {
                         self.registers.cr.modify(CR::MER::CLEAR);
                     }
                     if self.registers.cr.is_set(CR::MER1) {
                         self.registers.cr.modify(CR::MER1::CLEAR);
                     }
+                    // debug!("TEONA setam state la idle 3");
                     self.flash_state.set(State::Idle);
+                    self.flash_client.map(|client| {
+                        client.erase_complete(Error::CommandComplete);
+                    });
                 }
                 State::Programming => {
                     self.program_data.replace((
@@ -385,48 +424,70 @@ impl FlashDevice {
 
                     let (index, len, _) = self.program_data.get();
                     if index == len {
+                        self.registers.cr.modify(CR::PG::CLEAR);
                         self.program_data.replace((0, 0, 0));
+                        // debug!("TEONA setam state la idle 4");
                         self.flash_state.set(State::Idle);
-                        // todo send upcall that the programming command is done
+                        self.flash_client.map(|client| {
+                            self.program_buffer.take().map(|buffer| {
+                                client.write_complete(buffer, Error::CommandComplete);
+                            });
+                        });
                     } else {
-                        if !self.program_flash().is_ok() {
-                            // todo send upcall that something failed
-                        }
+                        self.program_flash();
                     }
-                },
+                }
                 _ => {}
             }
         }
+
         if let State::Reading(_sector) = self.flash_state.get() {
             // todo send to the client confirmation that the data was read
             // todo data is in self.read_buffer
             self.flash_state.set(State::Idle);
+            // panic!("TEONA setam state la idle 5");
+            self.flash_client.map(|client| {
+                // panic!("suntem in client");
+                self.read_buffer.take().map(|buffer| {
+                    // panic!("suntem la read_complete");
+                    client.read_complete(buffer, Error::CommandComplete);
+                    // panic!("totul ok?");
+                });
+            });
+            // panic!("era reading {}", _sector);
         }
 
         if self.registers.sr.is_set(SR::OPERR) {
+            debug!("[DRIVER] We have an error");
             if self.registers.sr.is_set(SR::WRPERR) {
                 // write protection error handle interrupt
                 self.registers.sr.modify(SR::WRPERR::SET);
+                debug!("[DRIVER] write protection");
             }
 
             if self.registers.sr.is_set(SR::RDERR) {
                 // read protection error
                 self.registers.sr.modify(SR::RDERR::SET);
+                debug!("[DRIVER] read protection");
             }
 
             if self.registers.sr.is_set(SR::PGAERR) {
                 // programming alignment error
                 self.registers.sr.modify(SR::PGAERR::SET);
+                debug!("[DRIVER] programming alignment error");
             }
 
             if self.registers.sr.is_set(SR::PGPERR) {
                 // programming parallelism error
                 self.registers.sr.modify(SR::PGPERR::SET);
+                debug!("[DRIVER] programming parallelism error");
+                self.registers.cr.modify(CR::PG::CLEAR);
             }
 
             if self.registers.sr.is_set(SR::PGSERR) {
                 // programming sequence error
                 self.registers.sr.modify(SR::PGSERR::SET);
+                debug!("[DRIVER] programming sequence error");
             }
         }
     }
@@ -440,16 +501,24 @@ impl Flash for FlashDevice {
         page_number: usize,
         buf: &'static mut Self::Page,
     ) -> Result<(), (ErrorCode, &'static mut Self::Page)> {
+        // debug!(
+        //     "[DRIVER] read_page in chips {} la adresa {:x} cu {}",
+        //     page_number,
+        //     SECTOR_START + page_number * SECTOR_SIZE,
+        //     buf.len()
+        // );
         if self.is_locked() {
             if !self.unlock_control_register() {
                 return Err((ErrorCode::OFF, buf));
             }
         }
         if page_number <= 3 {
+            // debug!("TEONA page_number ok");
             // todo what to do if offset + buf.len() exceed the sector and go into the next region - out of region
             self.read_sector(page_number, buf);
             Ok(())
         } else {
+            // debug!("TEONA send back error");
             Err((ErrorCode::INVAL, buf))
         }
     }
@@ -459,6 +528,11 @@ impl Flash for FlashDevice {
         page_number: usize,
         buf: &'static mut Self::Page,
     ) -> Result<(), (ErrorCode, &'static mut Self::Page)> {
+        // debug!(
+        //     "[DRIVER] write_page in chips {} la adresa {:x}",
+        //     page_number,
+        //     SECTOR_START + page_number * SECTOR_SIZE
+        // );
         if self.is_locked() {
             if !self.unlock_control_register() {
                 return Err((ErrorCode::OFF, buf));
@@ -467,52 +541,51 @@ impl Flash for FlashDevice {
         match self.flash_state.get() {
             State::Idle => {
                 self.program_data.set((0, buf.0.len(), page_number));
-                match self.program_buffer.map_or(Err(ErrorCode::NOMEM), |buffer| {
-                    for i in 0..buf.0.len() {
-                        buffer[i] = buf.0[i];
-                    }
-                    Ok(())
-                }) {
-                    Ok(_) => {
-                        match self.program_flash() {
-                            Ok(_) => {
-                               return Ok(());
-                            },
-                            Err(err) => {
-                                return Err((err, buf));
-                            },
-                        }
-                    },
-                    Err(_) => {
-                        return Err((ErrorCode::FAIL, buf));
-                    },
-                }                    
-            },
+                self.program_buffer.replace(buf);
+
+                self.program_flash();
+
+                // debug!("TEONA started flash");
+                Ok(())
+            }
             _ => {
-                return Err((ErrorCode::BUSY, buf));
+                // debug!("TEONA send back busy");
+                Err((ErrorCode::BUSY, buf))
             }
         }
     }
 
     fn erase_page(&self, page_number: usize) -> Result<(), ErrorCode> {
+        debug!("[DRIVER] erase_page in chips {}", page_number);
+        // panic!("erase page {}", page_number);
         if self.is_locked() {
             if !self.unlock_control_register() {
                 return Err(ErrorCode::OFF);
             }
         }
-        // todo where data should the tickv capable to erase - just from sector 12 to 16?
-        if page_number >= 12 && page_number <= 16 {
+
+        if page_number <= 3 {
             match self.flash_state.get() {
                 State::Idle => {
                     self.sector_erase(page_number);
+                    debug!("sending ok in erase page");
                     Ok(())
-                },
+                }
                 _ => {
-                    return Err(ErrorCode::BUSY);
+                    debug!("sending busy in erase page");
+                    Err(ErrorCode::BUSY)
                 }
             }
         } else {
+            debug!("sending inval in erase page");
             Err(ErrorCode::INVAL)
         }
+    }
+}
+
+impl<C: Client<Self>> HasClient<'static, C> for FlashDevice {
+    fn set_client(&self, client: &'static C) {
+        debug!("[DRIVER] set_client in chips");
+        self.flash_client.set(client);
     }
 }
