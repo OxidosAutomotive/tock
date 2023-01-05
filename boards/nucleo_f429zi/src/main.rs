@@ -18,8 +18,11 @@ use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::scheduler::round_robin::RoundRobinSched;
 use kernel::{create_capability, debug, static_init};
 
+use capsules::virtual_i2c::MuxI2C;
+use kernel::hil::i2c::I2CMaster;
 use stm32f429zi::gpio::{AlternateFunction, Mode, PinId, PortId};
 use stm32f429zi::interrupt_service::Stm32f429ziDefaultPeripherals;
+use stm32f4xx::i2c;
 
 /// Support routines for debugging I/O.
 pub mod io;
@@ -65,6 +68,8 @@ struct NucleoF429ZI {
 
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
+
+    screen: &'static capsules::screen::Screen<'static>,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -83,6 +88,7 @@ impl SyscallDriverLookup for NucleoF429ZI {
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
             capsules::gpio::DRIVER_NUM => f(Some(self.gpio)),
             capsules::rng::DRIVER_NUM => f(Some(self.rng)),
+            capsules::screen::DRIVER_NUM => f(Some(self.screen)),
             _ => f(None),
         }
     }
@@ -164,6 +170,7 @@ unsafe fn setup_dma(
 unsafe fn set_pin_primary_functions(
     syscfg: &stm32f429zi::syscfg::Syscfg,
     gpio_ports: &'static stm32f429zi::gpio::GpioPorts<'static>,
+    i2c1: &stm32f4xx::i2c::I2C,
 ) {
     use kernel::hil::gpio::Configure;
 
@@ -238,6 +245,23 @@ unsafe fn set_pin_primary_functions(
     gpio_ports.get_pin(PinId::PC02).map(|pin| {
         pin.set_mode(stm32f429zi::gpio::Mode::AnalogMode);
     });
+
+    gpio_ports.get_pin(PinId::PB08).map(|pin| {
+        pin.set_mode(Mode::AlternateFunctionMode);
+        pin.set_floating_state(kernel::hil::gpio::FloatingState::PullNone);
+        // AF4 is I2C
+        pin.set_alternate_function(AlternateFunction::AF4);
+    });
+    gpio_ports.get_pin(PinId::PB09).map(|pin| {
+        pin.make_output();
+        pin.set_floating_state(kernel::hil::gpio::FloatingState::PullNone);
+        pin.set_mode(Mode::AlternateFunctionMode);
+        // AF4 is I2C
+        pin.set_alternate_function(AlternateFunction::AF4);
+    });
+
+    i2c1.enable_clock();
+    i2c1.set_speed(i2c::I2CSpeed::Speed400k, 8);
 }
 
 /// Helper function for miscellaneous peripheral functions
@@ -298,7 +322,11 @@ pub unsafe fn main() {
 
     setup_peripherals(&base_peripherals.tim2, &peripherals.trng);
 
-    set_pin_primary_functions(syscfg, &base_peripherals.gpio_ports);
+    set_pin_primary_functions(
+        syscfg,
+        &base_peripherals.gpio_ports,
+        &peripherals.stm32f4.i2c1,
+    );
 
     setup_dma(
         dma1,
@@ -309,7 +337,7 @@ pub unsafe fn main() {
     let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(&PROCESSES));
 
     let dynamic_deferred_call_clients =
-        static_init!([DynamicDeferredCallClientState; 2], Default::default());
+        static_init!([DynamicDeferredCallClientState; 3], Default::default());
     let dynamic_deferred_caller = static_init!(
         DynamicDeferredCall,
         DynamicDeferredCall::new(dynamic_deferred_call_clients)
@@ -573,6 +601,38 @@ pub unsafe fn main() {
     ));
     let _ = process_console.start();
 
+    let i2c_mux = static_init!(
+        MuxI2C<'static>,
+        MuxI2C::new(&peripherals.stm32f4.i2c1, None, dynamic_deferred_caller)
+    );
+    peripherals.stm32f4.i2c1.set_master_client(i2c_mux);
+
+    let bus = components::bus::I2CMasterBusComponent::new(
+        i2c_mux,
+        capsules::ssd1306::SLAVE_ADDRESS_WRITE,
+    )
+    .finalize(components::i2c_master_bus_component_static!());
+
+    let ssd1306_screen = components::ssd1306::SSD1306Component::new(
+        mux_alarm,
+        bus,
+        &capsules::ssd1306::SSD1306_Screen,
+    )
+    .finalize(components::ssd1306_component_static!(
+        stm32f4xx::tim2::Tim2,
+        capsules::bus::I2CMasterBus<'static, capsules::virtual_i2c::I2CDevice<'static>>,
+    ));
+
+    let _ = ssd1306_screen.init();
+
+    let screen = components::screen::ScreenComponent::new(
+        board_kernel,
+        capsules::screen::DRIVER_NUM,
+        ssd1306_screen,
+        None,
+    )
+    .finalize(components::screen_component_static!(57600));
+
     let scheduler = components::sched::round_robin::RoundRobinComponent::new(&PROCESSES)
         .finalize(components::round_robin_component_static!(NUM_PROCS));
 
@@ -593,6 +653,7 @@ pub unsafe fn main() {
 
         scheduler,
         systick: cortexm4::systick::SysTick::new(),
+        screen,
     };
 
     // // Optional kernel tests

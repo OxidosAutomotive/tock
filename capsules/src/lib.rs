@@ -85,6 +85,7 @@ pub mod sip_hash;
 pub mod sound_pressure;
 pub mod spi_controller;
 pub mod spi_peripheral;
+pub mod ssd1306;
 pub mod st77xx;
 pub mod symmetric_encryption;
 pub mod temperature;

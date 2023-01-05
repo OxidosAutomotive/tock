@@ -346,12 +346,14 @@ impl<'a, I: I2CDevice> Bus<'a> for I2CMasterBus<'a, I> {
     }
 
     fn set_client(&self, client: &'a dyn Client) {
+        debug!("set client in bus");
         self.client.replace(client);
     }
 }
 
 impl<'a, I: I2CDevice> I2CClient for I2CMasterBus<'a, I> {
     fn command_complete(&self, buffer: &'static mut [u8], status: Result<(), Error>) {
+        debug!("[bus capsule] command_complete de la i2c master bus");
         let len = match status {
             Ok(()) => self.len.get(),
             _ => 0,

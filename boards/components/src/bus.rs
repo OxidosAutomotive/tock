@@ -29,6 +29,7 @@ use kernel::component::Component;
 use kernel::hil::bus8080;
 use kernel::hil::spi::{self, ClockPhase, ClockPolarity, SpiMasterDevice};
 
+use kernel::debug;
 // Setup static space for the objects.
 #[macro_export]
 macro_rules! bus8080_bus_component_static {
@@ -57,7 +58,9 @@ macro_rules! spi_bus_component_static {
 macro_rules! i2c_master_bus_component_static {
     () => {{
         let address_buffer = kernel::static_buf!([u8; 1]);
-        let bus = kernel::static_buf!(capsules::bus::I2CMasterBus<'static>);
+        let bus = kernel::static_buf!(
+            capsules::bus::I2CMasterBus<'static, capsules::virtual_i2c::I2CDevice<'static>>
+        );
         let i2c_device = kernel::static_buf!(capsules::virtual_i2c::I2CDevice<'static>);
 
         (bus, i2c_device, address_buffer)
@@ -171,7 +174,7 @@ impl Component for I2CMasterBusComponent {
 
         let bus = static_buffer.0.write(I2CMasterBus::new(i2c_device, buffer));
         i2c_device.set_client(bus);
-
+        debug!("setting client");
         bus
     }
 }

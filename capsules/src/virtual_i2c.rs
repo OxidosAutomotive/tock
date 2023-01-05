@@ -12,6 +12,7 @@ use kernel::dynamic_deferred_call::{
 use kernel::hil::i2c::{self, Error, I2CClient, I2CHwMasterClient};
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 
+use kernel::debug;
 pub struct MuxI2C<'a> {
     i2c: &'a dyn i2c::I2CMaster,
     smbus: Option<&'a dyn i2c::SMBusMaster>,
@@ -26,6 +27,7 @@ pub struct MuxI2C<'a> {
 
 impl I2CHwMasterClient for MuxI2C<'_> {
     fn command_complete(&self, buffer: &'static mut [u8], status: Result<(), Error>) {
+        debug!("command complete in virtual i2c la masterclient hw");
         if self.i2c_inflight.is_some() {
             self.i2c_inflight.take().map(move |device| {
                 device.command_complete(buffer, status);
@@ -232,6 +234,7 @@ impl<'a> I2CDevice<'a> {
     }
 
     pub fn set_client(&'a self, client: &'a dyn I2CClient) {
+        debug!("client set");
         self.mux.i2c_devices.push_head(self);
         self.client.set(client);
     }
@@ -284,6 +287,7 @@ impl i2c::I2CDevice for I2CDevice<'_> {
 
     fn write(&self, data: &'static mut [u8], len: u8) -> Result<(), (Error, &'static mut [u8])> {
         if self.operation.get() == Op::Idle {
+            debug!("we are here si scriem {}", len);
             self.buffer.replace(data);
             self.operation.set(Op::Write(len));
             self.mux.do_next_op();
