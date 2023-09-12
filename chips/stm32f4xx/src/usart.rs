@@ -13,7 +13,7 @@ use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 
 use crate::dma;
-use crate::rcc;
+use crate::rcc::{self, ClockInterfaceNominal};
 
 /// Universal synchronous asynchronous receiver transmitter
 #[repr(C)]
@@ -546,12 +546,14 @@ impl<'a, DMA: dma::StreamServer<'a>> hil::uart::Configure for Usart<'a, DMA> {
         self.registers.cr1.modify(CR1::PCE::CLEAR);
 
         // Set the baud rate. By default OVER8 is 0 (oversampling by 16) and
-        // PCLK1 is at 16Mhz. The desired baud rate is 115.2KBps. So according
-        // to Table 149 of reference manual, the value for BRR is 8.6875
-        // DIV_Fraction = 0.6875 * 16 = 11 = 0xB
-        // DIV_Mantissa = 8 = 0x8
-        self.registers.brr.modify(BRR::DIV_Fraction.val(0xB as u32));
-        self.registers.brr.modify(BRR::DIV_Mantissa.val(0x8 as u32));
+        // PCLK1 is at 16Mhz. The desired baud rate is 115.2KBps.
+        let nominal_frequency = self.clock.0.get_nominal_frequency();
+        let division = nominal_frequency / params.baud_rate;
+
+        self.registers.brr.modify(
+            BRR::DIV_Fraction.val(division & 0xF as u32)
+                + BRR::DIV_Mantissa.val(division >> 4 as u32),
+        );
 
         // Enable transmit block
         self.registers.cr1.modify(CR1::TE::SET);
@@ -632,5 +634,11 @@ impl ClockInterface for UsartClock<'_> {
 
     fn disable(&self) {
         self.0.disable();
+    }
+}
+
+impl ClockInterfaceNominal for UsartClock<'_> {
+    fn get_nominal_frequency(&self) -> u32 {
+        self.0.get_nominal_frequency()
     }
 }

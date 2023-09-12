@@ -286,7 +286,7 @@ unsafe fn create_peripherals() -> (
     let dma2 = static_init!(stm32f429zi::dma::Dma2, stm32f429zi::dma::Dma2::new(rcc));
     let peripherals = static_init!(
         Stm32f429ziDefaultPeripherals,
-        Stm32f429ziDefaultPeripherals::new(rcc, exti, dma1, dma2)
+        Stm32f429ziDefaultPeripherals::new(rcc, exti, dma1, dma2, None)
     );
     (peripherals, syscfg, dma2)
 }

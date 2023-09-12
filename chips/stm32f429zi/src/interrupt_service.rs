@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright Tock Contributors 2022.
 
-use stm32f4xx::chip::Stm32f4xxDefaultPeripherals;
+use stm32f4xx::{chip::Stm32f4xxDefaultPeripherals, clocks::hse::HSEClockType};
 
 use crate::{can_registers, stm32f429zi_nvic, trng_registers};
 
@@ -19,9 +19,10 @@ impl<'a> Stm32f429ziDefaultPeripherals<'a> {
         exti: &'a crate::exti::Exti<'a>,
         dma1: &'a crate::dma::Dma1<'a>,
         dma2: &'a crate::dma::Dma2<'a>,
+        hse_nominal_frequency: Option<(HSEClockType, usize)>,
     ) -> Self {
         Self {
-            stm32f4: Stm32f4xxDefaultPeripherals::new(rcc, exti, dma1, dma2),
+            stm32f4: Stm32f4xxDefaultPeripherals::new(rcc, exti, dma1, dma2, hse_nominal_frequency),
             trng: stm32f4xx::trng::Trng::new(trng_registers::RNG_BASE, rcc),
             can1: stm32f4xx::can::Can::new(rcc, can_registers::CAN1_BASE),
         }

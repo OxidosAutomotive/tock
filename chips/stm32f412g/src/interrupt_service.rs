@@ -20,7 +20,7 @@ impl<'a> Stm32f412gDefaultPeripherals<'a> {
         dma2: &'a crate::dma::Dma2<'a>,
     ) -> Self {
         Self {
-            stm32f4: Stm32f4xxDefaultPeripherals::new(rcc, exti, dma1, dma2),
+            stm32f4: Stm32f4xxDefaultPeripherals::new(rcc, exti, dma1, dma2, None),
             trng: stm32f4xx::trng::Trng::new(trng_registers::RNG_BASE, rcc),
         }
     }

@@ -7,33 +7,33 @@
 #![deny(dead_code)]
 #![deny(missing_docs)]
 #![deny(unused_imports)]
-//! HSI (high-speed internal) clock driver for the STM32F4xx family. [^doc_ref]
+//! HSE (high-speed external) clock driver for the STM32F4xx family. [^doc_ref]
 //!
 //! # Usage
 //!
 //! For the purposes of brevity, any error checking has been removed. In real applications, always
-//! check the return values of the [Hsi] methods.
+//! check the return values of the [Hse] methods.
 //!
-//! First, get a reference to the [Hsi] struct:
+//! First, get a reference to the [Hse] struct:
 //! ```rust,ignore
-//! let hsi = &peripherals.stm32f4.clocks.hsi;
+//! let hse = &peripherals.stm32f4.clocks.hse;
 //! ```
 //!
 //! ## Start the clock
 //!
 //! ```rust,ignore
-//! hsi.enable();
+//! hse.enable();
 //! ```
 //!
 //! ## Stop the clock
 //!
 //! ```rust,ignore
-//! hsi.disable();
+//! hse.disable();
 //! ```
 //!
 //! ## Check if the clock is enabled
 //! ```rust,ignore
-//! if hsi.is_enabled() {
+//! if hse.is_enabled() {
 //!     /* Do something */
 //! } else {
 //!     /* Do something */
@@ -42,49 +42,69 @@
 //!
 //! ## Get the frequency of the clock
 //! ```rust,ignore
-//! let hsi_frequency_mhz = hsi.get_frequency().unwrap();
+//! let hsi_frequency_mhz = hse.get_frequency().unwrap();
 //! ```
 //!
 //! [^doc_ref]: See 6.2.2 in the documentation.
+
+use core::cell::Cell;
 
 use crate::rcc::Rcc;
 
 use kernel::debug;
 use kernel::ErrorCode;
 
-/// HSI frequency in MHz
-pub const HSI_FREQUENCY: usize = 16_000_000;
-
-/// Main HSI clock structure
-pub struct Hsi<'a> {
-    rcc: &'a Rcc,
+/// Type of external clock connected to the HSE block
+#[derive(Copy, Clone, PartialEq)]
+pub enum HSEClockType {
+    /// Clock source (square wave) connected directly to OSC_IN
+    Direct,
+    /// Crystal oscillator connected to OSC_IN and OSC_OUT
+    Crystal,
 }
 
-impl<'a> Hsi<'a> {
-    /// Create a new instance of the HSI clock.
+/// Main HSE clock structure
+pub struct Hse<'a> {
+    rcc: &'a Rcc,
+    typ: Cell<Option<(HSEClockType, usize)>>,
+}
+
+impl<'a> Hse<'a> {
+    /// Create a new instance of the HSE clock.
     ///
     /// # Parameters
     ///
     /// + rcc: an instance of [crate::rcc]
+    /// + nominal_frequency: the nominal frequency of the external clock (in Hz)
     ///
     /// # Returns
     ///
-    /// An instance of the HSI clock.
-    pub(in crate::clocks) fn new(rcc: &'a Rcc) -> Self {
-        Self { rcc }
+    /// An instance of the HSE clock.
+    pub(in crate::clocks) fn new(
+        rcc: &'a Rcc,
+        clock_setting: Option<(HSEClockType, usize)>,
+    ) -> Self {
+        Self {
+            rcc,
+            typ: Cell::from(clock_setting),
+        }
     }
 
-    /// Start the HSI clock.
+    /// Start the HSE clock.
     ///
     /// # Errors
     ///
-    /// + [Err]\([ErrorCode::BUSY]\): if enabling the HSI clock took too long. Recall this method to
+    /// + [Err]\([ErrorCode::BUSY]\): if enabling the HSE clock took too long. Recall this method to
     /// ensure the HSI clock is running.
     pub fn enable(&self) -> Result<(), ErrorCode> {
-        self.rcc.enable_hsi_clock();
+        match self.typ.get() {
+            None => return Err(ErrorCode::INVAL),
+            Some((typ, _freq)) => self.rcc.set_hse_clock_type(&typ),
+        }
+        self.rcc.enable_hse_clock();
 
         for _ in 0..100 {
-            if self.rcc.is_ready_hsi_clock() {
+            if self.rcc.is_ready_hse_clock() {
                 return Ok(());
             }
         }
@@ -92,7 +112,7 @@ impl<'a> Hsi<'a> {
         Err(ErrorCode::BUSY)
     }
 
-    /// Stop the HSI clock.
+    /// Stop the HSE clock.
     ///
     /// # Errors
     ///
@@ -100,14 +120,15 @@ impl<'a> Hsi<'a> {
     /// + [Err]\([ErrorCode::BUSY]\): disabling the HSI clock took to long. Retry to ensure it is
     /// not running.
     pub fn disable(&self) -> Result<(), ErrorCode> {
-        if self.rcc.is_hsi_clock_system_clock() {
+        if self.rcc.is_hse_clock_system_clock() {
             return Err(ErrorCode::FAIL);
         }
 
-        self.rcc.disable_hsi_clock();
+        self.rcc.disable_hse_clock();
 
+        // TODO: check if makes sense
         for _ in 0..10 {
-            if self.rcc.is_ready_hsi_clock() == false {
+            if self.rcc.is_ready_hse_clock() == false {
                 return Ok(());
             }
         }
@@ -115,25 +136,29 @@ impl<'a> Hsi<'a> {
         Err(ErrorCode::BUSY)
     }
 
-    /// Check whether the HSI clock is enabled or not.
+    /// Check whether the HSE clock is enabled or not.
     ///
     /// # Returns
     ///
-    /// + [false]: the HSI clock is not enabled
-    /// + [true]: the HSI clock is enabled
+    /// + [false]: the HSE clock is not enabled
+    /// + [true]: the HSE clock is enabled
     pub fn is_enabled(&self) -> bool {
-        self.rcc.is_enabled_hsi_clock()
+        self.rcc.is_enabled_hse_clock()
     }
 
     /// Get the frequency in MHz of the HSI clock.
     ///
     /// # Returns
     ///
-    /// + [Some]\(frequency_mhz\): if the HSI clock is enabled.
+    /// + [Some]\(frequency_hz\): if the HSI clock is enabled.
     /// + [None]: if the HSI clock is disabled.
     pub fn get_frequency(&self) -> Option<usize> {
-        if self.is_enabled() {
-            Some(HSI_FREQUENCY)
+        if let Some((_, freq)) = self.typ.get() {
+            if self.is_enabled() {
+                Some(freq)
+            } else {
+                None
+            }
         } else {
             None
         }
@@ -142,29 +167,29 @@ impl<'a> Hsi<'a> {
 
 /// Tests for the HSI clock
 ///
-/// This module ensures that the HSI clock works as expected. If changes are brought to the HSI
+/// This module ensures that the HSE clock works as expected. If changes are brought to the HSE
 /// clock, ensure to run all the tests to see if anything is broken.
 ///
 /// # Usage
 ///
-/// First, import the [crate::clocks::hsi] module in the desired board main file:
+/// First, import the [crate::clocks::hse] module in the desired board main file:
 ///
 /// ```rust,ignore
-/// use stm32f429zi::hsi;
+/// use stm32f429zi::hse;
 /// ```
 ///
 /// Then, to run the tests, put the following line before [kernel::process::load_processes]:
 ///
 /// ```rust,ignore
-/// hsi::tests::run_all(&peripherals.stm32f4.clocks.hsi);
+/// hse::tests::run_all(&peripherals.stm32f4.clocks.hse);
 /// ```
 ///
 /// If everything works as expected, the following message should be printed on the kernel console:
 ///
 /// ```text
 /// ===============================================
-/// Testing HSI...
-/// Finished testing HSI. Everything is alright!
+/// Testing HSE...
+/// Finished testing HSE. Everything is alright!
 /// ===============================================
 /// ```
 ///
@@ -173,24 +198,20 @@ pub mod tests {
     use super::*;
 
     /// Run the entire test suite.
-    pub fn run(hsi: &Hsi) {
+    pub fn run(hse: Hse) {
         debug!("");
         debug!("===============================================");
         debug!("Testing HSI...");
 
-        // By default, the HSI clock is enabled
-        assert_eq!(true, hsi.is_enabled());
+        // By default, the HSE clock is disabled
+        assert_eq!(false, hse.is_enabled());
 
-        // HSI frequency is 16MHz
-        assert_eq!(Some(HSI_FREQUENCY), hsi.get_frequency());
+        // Enabling the HSE clock should succeed
+        assert_eq!(Ok(()), hse.enable());
 
-        // Nothing should happen if the HSI clock is being enabled when already running
-        assert_eq!(Ok(()), hsi.enable());
+        assert_eq!(Some(hse.typ.get().unwrap().1), hse.get_frequency());
 
-        // Impossible to disable the HSI clock since it is the system clock source
-        assert_eq!(Err(ErrorCode::FAIL), hsi.disable());
-
-        debug!("Finished testing HSI. Everything is alright!");
+        debug!("Finished testing HSE. Everything is alright!");
         debug!("===============================================");
         debug!("");
     }

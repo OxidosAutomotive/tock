@@ -268,7 +268,7 @@ impl Flash {
 /// the output of the test execution.
 pub mod tests {
     use super::*;
-    use crate::clocks::hsi::HSI_FREQUENCY_MHZ;
+    use crate::clocks::hsi::HSI_FREQUENCY;
 
     const AHB_ETHERNET_MINIMUM_FREQUENCY_MHZ: usize = 25;
     // Different chips have different maximum values for APB1
@@ -307,7 +307,7 @@ pub mod tests {
 
         assert_eq!(
             FlashLatency::Latency0,
-            get_number_wait_cycles_based_on_frequency(HSI_FREQUENCY_MHZ)
+            get_number_wait_cycles_based_on_frequency(HSI_FREQUENCY)
         );
 
         assert_eq!(
@@ -386,7 +386,7 @@ pub mod tests {
         debug!("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
         debug!("Testing setting flash latency...");
 
-        assert_eq!(Ok(()), flash.set_latency(HSI_FREQUENCY_MHZ));
+        assert_eq!(Ok(()), flash.set_latency(HSI_FREQUENCY));
         assert_eq!(FlashLatency::Latency0, flash.get_latency());
 
         assert_eq!(
@@ -434,7 +434,7 @@ pub mod tests {
         }
 
         // Revert to default settings
-        assert_eq!(Ok(()), flash.set_latency(HSI_FREQUENCY_MHZ));
+        assert_eq!(Ok(()), flash.set_latency(HSI_FREQUENCY));
         assert_eq!(FlashLatency::Latency0, flash.get_latency());
 
         debug!("Finished testing setting flash latency. Everything is alright!");

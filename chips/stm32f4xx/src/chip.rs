@@ -9,6 +9,7 @@ use cortexm4::{self, CortexM4, CortexMVariant};
 use kernel::platform::chip::Chip;
 use kernel::platform::chip::InterruptService;
 
+use crate::clocks::hse::HSEClockType;
 use crate::dma;
 use crate::nvic;
 
@@ -41,10 +42,11 @@ impl<'a> Stm32f4xxDefaultPeripherals<'a> {
         exti: &'a crate::exti::Exti<'a>,
         dma1: &'a dma::Dma1<'a>,
         dma2: &'a dma::Dma2<'a>,
+        hse_nominal_frequnecy: Option<(HSEClockType, usize)>,
     ) -> Self {
         Self {
             adc1: crate::adc::Adc::new(rcc),
-            clocks: crate::clocks::Clocks::new(rcc),
+            clocks: crate::clocks::Clocks::new(rcc, hse_nominal_frequnecy),
             dma1_streams: dma::new_dma1_stream(dma1),
             dma2_streams: dma::new_dma2_stream(dma2),
             exti,

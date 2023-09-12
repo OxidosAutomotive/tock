@@ -30,6 +30,7 @@ pub mod syscfg;
 pub mod tim2;
 pub mod trng;
 pub mod usart;
+pub mod utils;
 
 // Clocks
 pub mod clocks;

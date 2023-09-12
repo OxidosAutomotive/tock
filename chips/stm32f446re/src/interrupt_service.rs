@@ -17,7 +17,7 @@ impl<'a> Stm32f446reDefaultPeripherals<'a> {
         dma2: &'a crate::dma::Dma2<'a>,
     ) -> Self {
         Self {
-            stm32f4: Stm32f4xxDefaultPeripherals::new(rcc, exti, dma1, dma2),
+            stm32f4: Stm32f4xxDefaultPeripherals::new(rcc, exti, dma1, dma2, None),
         }
     }
     // Necessary for setting up circular dependencies & registering deferred

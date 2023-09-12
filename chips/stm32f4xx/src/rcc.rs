@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright Tock Contributors 2022.
 
+use core::cell::Cell;
 use kernel::platform::chip::ClockInterface;
-use kernel::utilities::registers::interfaces::{ReadWriteable, Readable};
+use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::utilities::registers::{register_bitfields, ReadWrite};
 use kernel::utilities::StaticRef;
+
+use crate::clocks::hse::HSEClockType;
 
 /// Reset and clock control
 #[repr(C)]
@@ -717,28 +720,33 @@ pub(crate) const RESET_PLLN_VALUE: usize = 0b011_000_000; // N = 192
 //
 // Choose PLLM::DivideBy8 for reduced PLL jitter or PLLM::DivideBy16 for default hardware
 // configuration
-pub(crate) const DEFAULT_PLLM_VALUE: PLLM = PLLM::DivideBy8;
+pub(crate) const DEFAULT_PLLM_VALUE: usize = 8;
 // DON'T CHANGE THIS VALUE
 pub(crate) const DEFAULT_PLLN_VALUE: usize = RESET_PLLN_VALUE;
 // Dynamically computing the default PLLP value based on the PLLM value
 pub(crate) const DEFAULT_PLLP_VALUE: PLLP = match DEFAULT_PLLM_VALUE {
-    PLLM::DivideBy16 => PLLP::DivideBy2,
-    PLLM::DivideBy8 => PLLP::DivideBy4,
+    16 => PLLP::DivideBy2,
+    8 => PLLP::DivideBy4,
+    _ => PLLP::DivideBy4,
 };
 // Dynamically computing the default PLLQ value based on the PLLM value
 pub(crate) const DEFAULT_PLLQ_VALUE: PLLQ = match DEFAULT_PLLM_VALUE {
-    PLLM::DivideBy16 => PLLQ::DivideBy4,
-    PLLM::DivideBy8 => PLLQ::DivideBy8,
+    16 => PLLQ::DivideBy4,
+    8 => PLLQ::DivideBy8,
+    _ => PLLQ::DivideBy8,
 };
 
 pub struct Rcc {
     registers: StaticRef<RccRegisters>,
+    nominal_frequency: [Cell<u32>; 8],
 }
 
 impl Rcc {
     pub fn new() -> Self {
+        const UNINITIALIZED_CELL: Cell<u32> = Cell::new(0);
         let rcc = Self {
             registers: RCC_BASE,
+            nominal_frequency: [UNINITIALIZED_CELL; 8],
         };
         rcc.init();
         rcc
@@ -772,7 +780,7 @@ impl Rcc {
     pub(crate) fn get_sys_clock_source(&self) -> SysClockSource {
         match self.registers.cfgr.read(CFGR::SWS) {
             0b00 => SysClockSource::HSI,
-            //0b01 => SysClockSource::HSE, Uncomment this when HSE support is added
+            0b01 => SysClockSource::HSE,
             _ => SysClockSource::PLL,
             // Uncomment this when PPLLR support is added. Also change the above match arm to
             // 0b10 => SysClockSource::PLL,
@@ -794,6 +802,16 @@ impl Rcc {
                 && self.registers.pllcfgr.read(PLLCFGR::PLLSRC) == PllSource::HSI as u32
     }
 
+    pub(crate) fn is_hse_clock_system_clock(&self) -> bool {
+        match self.get_sys_clock_source() {
+            SysClockSource::HSE => true,
+            SysClockSource::PLL => {
+                self.registers.pllcfgr.read(PLLCFGR::PLLSRC) == PllSource::HSE as u32
+            }
+            _ => false,
+        }
+    }
+
     /* HSI clock */
     // The HSI clock must not be configured as the system clock, either directly or indirectly.
     pub(crate) fn disable_hsi_clock(&self) {
@@ -811,6 +829,31 @@ impl Rcc {
     // Indicates whether the HSI oscillator is stable
     pub(crate) fn is_ready_hsi_clock(&self) -> bool {
         self.registers.cr.is_set(CR::HSIRDY)
+    }
+
+    /* HSE clock */
+    pub(crate) fn disable_hse_clock(&self) {
+        self.registers.cr.modify(CR::HSEON::CLEAR);
+    }
+
+    pub(crate) fn enable_hse_clock(&self) {
+        self.registers.cr.modify(CR::HSEON::SET);
+    }
+
+    pub(crate) fn is_enabled_hse_clock(&self) -> bool {
+        self.registers.cr.is_set(CR::HSEON)
+    }
+
+    // Indicates whether the HSE oscillator is stable
+    pub(crate) fn is_ready_hse_clock(&self) -> bool {
+        self.registers.cr.is_set(CR::HSERDY)
+    }
+
+    pub(crate) fn set_hse_clock_type(&self, typ: &HSEClockType) {
+        match typ {
+            HSEClockType::Crystal => self.registers.cr.modify(CR::HSEBYP::CLEAR),
+            HSEClockType::Direct => self.registers.cr.modify(CR::HSEBYP::SET),
+        }
     }
 
     /* Main PLL clock*/
@@ -841,7 +884,7 @@ impl Rcc {
     }
 
     // This method must be called only when all PLL clocks are disabled
-    pub(crate) fn set_pll_clocks_m_divider(&self, m: PLLM) {
+    pub(crate) fn set_pll_clocks_m_divider(&self, m: usize) {
         self.registers.pllcfgr.modify(PLLCFGR::PLLM.val(m as u32));
     }
 
@@ -858,6 +901,12 @@ impl Rcc {
     // This method must be called only if the main PLL clock is disabled
     pub(crate) fn set_pll_clock_q_divider(&self, q: PLLQ) {
         self.registers.pllcfgr.modify(PLLCFGR::PLLQ.val(q as u32));
+    }
+
+    pub(crate) fn set_pll_main_dividers(&self, m: usize, n: usize, p: PLLP) {
+        self.registers.pllcfgr.modify(
+            PLLCFGR::PLLM.val(m as u32) + PLLCFGR::PLLN.val(n as u32) + PLLCFGR::PLLP.val(p as u32),
+        );
     }
 
     /* AHB prescaler */
@@ -946,6 +995,141 @@ impl Rcc {
             0b110 => MCO1Divider::DivideBy4,
             0b111 => MCO1Divider::DivideBy5,
             _ => MCO1Divider::DivideBy1,
+        }
+    }
+
+    pub(crate) fn disable_all_peripherals_except_pwr(&self) {
+        // RefMan 5.1.4 Note: During the Over-drive switch activation, no peripheral clocks should be enabled. The peripheral clocks must be enabled once the Over-drive mode is activated.
+        self.registers.apb1enr.write(APB1ENR::PWREN::SET);
+    }
+
+    pub fn compute_nominal_frequency(
+        &self,
+        hse_nominal_frequency: Option<usize>,
+    ) -> Result<(), ()> {
+        // this function computes the system clock based on RCC and PLL registers
+        let system_clock: u32 = match self.get_sys_clock_source() {
+            SysClockSource::HSI => 16_000_000,
+            SysClockSource::HSE => {
+                if let Some(hse_frequency) = hse_nominal_frequency {
+                    hse_frequency as u32
+                } else {
+                    return Err(());
+                }
+            }
+            SysClockSource::PLL => {
+                // extract PLL multiplication and division factors from configuration registers
+                let pll_local = self.registers.pllcfgr.extract();
+                let pll_multiplier = pll_local.read(PLLCFGR::PLLN);
+                let pll_division: u32 =
+                    pll_local.read(PLLCFGR::PLLM) * (pll_local.read(PLLCFGR::PLLP) * 2 + 2);
+
+                // check PLL clock source
+                match self.registers.pllcfgr.read_as_enum(PLLCFGR::PLLSRC) {
+                    Some(PLLCFGR::PLLSRC::Value::HSI) => {
+                        (16_000_000 * pll_multiplier) / pll_division
+                    }
+                    Some(PLLCFGR::PLLSRC::Value::HSE) => {
+                        (self.nominal_frequency[NominalClockDomain::Sysclk as usize].get()
+                            * pll_multiplier)
+                            / pll_division
+                    }
+                    _ => return Err(()),
+                }
+            }
+        };
+
+        let cfgr_local = self.registers.cfgr.extract();
+        // AHB prescaler register documented in RM ch6.3.3 pg 167
+        let ahb_prescaler_reg = cfgr_local.read(CFGR::HPRE);
+        let ahb_prescaler = match ahb_prescaler_reg {
+            0b1000 => 2,
+            0b1001 => 4,
+            0b1010 => 8,
+            0b1011 => 16,
+            0b1100 => 64,
+            0b1101 => 128,
+            0b1110 => 256,
+            0b1111 => 512,
+            _ => 1,
+        };
+
+        // APB1 prescaler register documented in RM ch6.3.3 pg 166
+        let apb1_prescaler_reg = cfgr_local.read(CFGR::PPRE1);
+        let apb1_prescaler = match apb1_prescaler_reg {
+            0b100 => 2,
+            0b101 => 4,
+            0b110 => 8,
+            0b111 => 16,
+            _ => 1,
+        };
+
+        // APB1 prescaler register documented in RM ch6.3.3 pg 166
+        let apb2_prescaler_reg = cfgr_local.read(CFGR::PPRE2);
+        let apb2_prescaler = match apb2_prescaler_reg {
+            0b100 => 2,
+            0b101 => 4,
+            0b110 => 8,
+            0b111 => 16,
+            _ => 1,
+        };
+
+        let timpre_bit = self.registers.dckcfgr.is_set(DCKCFGR::TIMPRE);
+        self.nominal_frequency[NominalClockDomain::HCLK as usize].set(system_clock / ahb_prescaler); // HCLK and FCLK to AHB Bus, core, memory, DMA
+        self.nominal_frequency[NominalClockDomain::Apb1 as usize]
+            .set(system_clock / apb1_prescaler); // APB1 peripherals
+        self.nominal_frequency[NominalClockDomain::Apb1Timers as usize].set(
+            match (timpre_bit, apb1_prescaler) {
+                // APB1 timers (see RM ch6.3.3 pg 208)
+                (false, 1) => system_clock / apb1_prescaler,
+                (false, _) => (2 * system_clock) / apb1_prescaler,
+                (true, 1) | (true, 2) | (true, 4) => system_clock / ahb_prescaler,
+                (true, _) => (4 * system_clock) / apb1_prescaler,
+            },
+        );
+        self.nominal_frequency[NominalClockDomain::Apb2 as usize]
+            .set(system_clock / apb1_prescaler); // APB2 peripherals
+        self.nominal_frequency[NominalClockDomain::Apb2Timers as usize].set(
+            match (timpre_bit, apb2_prescaler) {
+                // APB2 timers (see RM ch6.3.3 pg 208)
+                (false, 1) => system_clock / apb2_prescaler,
+                (false, _) => (2 * system_clock) / apb2_prescaler,
+                (true, 1) | (true, 2) | (true, 4) => system_clock / ahb_prescaler,
+                (true, _) => (4 * system_clock) / apb2_prescaler,
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn get_nominal_frequency_(&self, domain: &PeripheralClockType) -> u32 {
+        match domain {
+            // PeripheralClockType::AHB1(HCLK1::) => {
+            //     self.nominal_frequency[NominalClockDomain::SysTick as usize].get()
+            // }
+            PeripheralClockType::AHB1(_) => {
+                self.nominal_frequency[NominalClockDomain::HCLK as usize].get()
+            }
+            PeripheralClockType::AHB2(_) => {
+                self.nominal_frequency[NominalClockDomain::HCLK as usize].get()
+            }
+            PeripheralClockType::AHB3(_) => {
+                self.nominal_frequency[NominalClockDomain::HCLK as usize].get()
+            }
+            PeripheralClockType::APB1(ref v) => match v {
+                // APB1 timers are conditionally prescaled based on APB1 peripheral clock
+                PCLK1::TIM2 => {
+                    self.nominal_frequency[NominalClockDomain::Apb1Timers as usize].get()
+                }
+                _ => self.nominal_frequency[NominalClockDomain::Apb1 as usize].get(),
+            },
+            PeripheralClockType::APB2(ref v) => match v {
+                // APB1 timers are conditionally prescaled based on APB1 peripheral clock
+                // PCLK2::TIM1 | PCLK2::TIM9 => {
+                //     self.nominal_frequency[NominalClockDomain::Apb2Timers as usize].get()
+                // }
+                _ => self.nominal_frequency[NominalClockDomain::Apb2Timers as usize].get(),
+            },
         }
     }
 
@@ -1254,25 +1438,38 @@ impl Rcc {
         self.registers.apb1enr.is_set(APB1ENR::CAN1EN)
     }
 
+    fn is_enabled_can2_clock(&self) -> bool {
+        self.registers.apb1enr.is_set(APB1ENR::CAN2EN)
+    }
+
     fn enable_can1_clock(&self) {
         self.registers.apb1rstr.modify(APB1RSTR::CAN1RST::SET);
         self.registers.apb1rstr.modify(APB1RSTR::CAN1RST::CLEAR);
         self.registers.apb1enr.modify(APB1ENR::CAN1EN::SET);
     }
 
+    fn enable_can2_clock(&self) {
+        self.registers.apb1rstr.modify(APB1RSTR::CAN2RST::SET);
+        self.registers.apb1rstr.modify(APB1RSTR::CAN2RST::CLEAR);
+        self.registers.apb1enr.modify(APB1ENR::CAN2EN::SET);
+    }
+
     fn disable_can1_clock(&self) {
         self.registers.apb1enr.modify(APB1ENR::CAN1EN::CLEAR);
     }
+
+    fn disable_can2_clock(&self) {
+        self.registers.apb1enr.modify(APB1ENR::CAN2EN::CLEAR);
+    }
 }
 
-// NOTE: HSE is not yet supported as source clock.
-pub(crate) enum PllSource {
+pub enum PllSource {
     HSI = 0b0,
-    //HSE = 0b1,
+    HSE = 0b1,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub(crate) enum PLLP {
+pub enum PLLP {
     DivideBy2 = 0b00,
     DivideBy4 = 0b01,
     DivideBy6 = 0b10,
@@ -1286,17 +1483,9 @@ impl From<PLLP> for usize {
     }
 }
 
-// Theoretically, the PLLM value can range from 2 to 63. However, the current implementation was
-// designed to support 1MHz frequency precision. In a future update, PLLM will become a usize.
-#[allow(dead_code)]
-pub(crate) enum PLLM {
-    DivideBy8 = 8,
-    DivideBy16 = 16,
-}
-
 #[derive(Copy, Clone, Debug, PartialEq)]
 // Due to the restricted values for PLLM, PLLQ 2/10-15 values are meaningless.
-pub(crate) enum PLLQ {
+pub enum PLLQ {
     DivideBy3 = 3,
     DivideBy4,
     DivideBy5,
@@ -1310,7 +1499,7 @@ pub(crate) enum PLLQ {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SysClockSource {
     HSI = 0b00,
-    //HSE = 0b01, Uncomment this when support for HSE is added
+    HSE = 0b01,
     PLL = 0b10,
     // NOTE: not all STM32F4xx boards support this source.
     //PPLLR = 0b11, Uncomment this when support for PPLLR is added
@@ -1319,7 +1508,7 @@ pub enum SysClockSource {
 pub enum MCO1Source {
     HSI = 0b00,
     //LSE = 0b01, // When support for LSE is added, uncomment this
-    //HSE = 0b10, // When support for HSE is added, uncomment this
+    HSE = 0b10,
     PLL = 0b11,
 }
 
@@ -1381,6 +1570,16 @@ impl From<APBPrescaler> for usize {
     }
 }
 
+pub enum NominalClockDomain {
+    Sysclk = 0,
+    HCLK = 1,
+    SysTick = 2,
+    Apb1,
+    Apb1Timers,
+    Apb2,
+    Apb2Timers,
+}
+
 pub struct PeripheralClock<'a> {
     pub clock: PeripheralClockType,
     rcc: &'a Rcc,
@@ -1428,6 +1627,7 @@ pub enum PCLK1 {
     SPI3,
     I2C1,
     CAN1,
+    CAN2,
 }
 
 /// Peripherals clocked by PCLK2
@@ -1476,6 +1676,7 @@ impl<'a> ClockInterface for PeripheralClock<'a> {
                 PCLK1::I2C1 => self.rcc.is_enabled_i2c1_clock(),
                 PCLK1::SPI3 => self.rcc.is_enabled_spi3_clock(),
                 PCLK1::CAN1 => self.rcc.is_enabled_can1_clock(),
+                PCLK1::CAN2 => self.rcc.is_enabled_can2_clock(),
             },
             PeripheralClockType::APB2(ref v) => match v {
                 PCLK2::USART1 => self.rcc.is_enabled_usart1_clock(),
@@ -1548,6 +1749,9 @@ impl<'a> ClockInterface for PeripheralClock<'a> {
                 }
                 PCLK1::CAN1 => {
                     self.rcc.enable_can1_clock();
+                }
+                PCLK1::CAN2 => {
+                    self.rcc.enable_can2_clock();
                 }
             },
             PeripheralClockType::APB2(ref v) => match v {
@@ -1628,6 +1832,9 @@ impl<'a> ClockInterface for PeripheralClock<'a> {
                 PCLK1::CAN1 => {
                     self.rcc.disable_can1_clock();
                 }
+                PCLK1::CAN2 => {
+                    self.rcc.disable_can2_clock();
+                }
             },
             PeripheralClockType::APB2(ref v) => match v {
                 PCLK2::USART1 => {
@@ -1641,5 +1848,15 @@ impl<'a> ClockInterface for PeripheralClock<'a> {
                 }
             },
         }
+    }
+}
+
+pub trait ClockInterfaceNominal {
+    fn get_nominal_frequency(&self) -> u32;
+}
+
+impl<'a> ClockInterfaceNominal for PeripheralClock<'a> {
+    fn get_nominal_frequency(&self) -> u32 {
+        self.rcc.get_nominal_frequency_(&self.clock)
     }
 }

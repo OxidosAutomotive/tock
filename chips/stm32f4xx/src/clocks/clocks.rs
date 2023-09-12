@@ -161,7 +161,7 @@ use crate::chip_specific::clock_constants::APB1_FREQUENCY_LIMIT_MHZ;
 use crate::chip_specific::clock_constants::APB2_FREQUENCY_LIMIT_MHZ;
 use crate::chip_specific::clock_constants::SYS_CLOCK_FREQUENCY_LIMIT_MHZ;
 use crate::clocks::hsi::Hsi;
-use crate::clocks::hsi::HSI_FREQUENCY_MHZ;
+use crate::clocks::hsi::HSI_FREQUENCY;
 use crate::clocks::pll::Pll;
 use crate::flash::Flash;
 use crate::rcc::AHBPrescaler;
@@ -175,24 +175,31 @@ use kernel::debug;
 use kernel::utilities::cells::OptionalCell;
 use kernel::ErrorCode;
 
+use super::hse::HSEClockType;
+use super::hse::Hse;
+use super::pwr::Pwr;
+
 /// Main struct for configuring on-board clocks.
 pub struct Clocks<'a> {
     rcc: &'a Rcc,
     flash: OptionalCell<&'a Flash>,
     /// High speed internal clock
     pub hsi: Hsi<'a>,
+    /// High speed external clock
+    pub hse: Hse<'a>,
     /// Main phase loop-lock clock
     pub pll: Pll<'a>,
 }
 
 impl<'a> Clocks<'a> {
     // The constructor must be called when the default peripherals are created
-    pub(crate) fn new(rcc: &'a Rcc) -> Self {
+    pub(crate) fn new(rcc: &'a Rcc, hse_clock: Option<(HSEClockType, usize)>) -> Self {
         Self {
             rcc,
             flash: OptionalCell::empty(),
             hsi: Hsi::new(rcc),
-            pll: Pll::new(rcc),
+            pll: Pll::new(rcc, Pwr::new()),
+            hse: Hse::new(rcc, hse_clock),
         }
     }
 
@@ -355,6 +362,7 @@ impl<'a> Clocks<'a> {
         if let false = match source {
             SysClockSource::HSI => self.hsi.is_enabled(),
             SysClockSource::PLL => self.pll.is_enabled(),
+            SysClockSource::HSE => self.hse.is_enabled(),
         } {
             return Err(ErrorCode::FAIL);
         }
@@ -364,8 +372,9 @@ impl<'a> Clocks<'a> {
         // Get the frequency of the source to be configured
         let alternate_frequency = match source {
             // The unwrap can't fail because the source clock status was checked before
-            SysClockSource::HSI => self.hsi.get_frequency().unwrap(),
-            SysClockSource::PLL => self.pll.get_frequency().unwrap(),
+            SysClockSource::HSI => self.hsi.get_frequency().ok_or(ErrorCode::FAIL)?,
+            SysClockSource::PLL => self.pll.get_frequency().ok_or(ErrorCode::FAIL)?,
+            SysClockSource::HSE => self.hse.get_frequency().ok_or(ErrorCode::FAIL)?,
         };
 
         // Check the alternate frequency is not higher than the system clock limit
@@ -407,8 +416,15 @@ impl<'a> Clocks<'a> {
                 .set_latency(alternate_frequency)?;
         }
 
-        // If this point is reached, everything worked as expected
-        Ok(())
+        // check if the clock switching was succesful
+        // if not, the
+        for _ in 1..20 {
+            if self.rcc.get_sys_clock_source() == source {
+                return Ok(());
+            }
+        }
+
+        Err(ErrorCode::BUSY)
     }
 
     /// Get the current system clock source
@@ -424,6 +440,7 @@ impl<'a> Clocks<'a> {
             // they are configured as the system clock
             SysClockSource::HSI => self.hsi.get_frequency().unwrap(),
             SysClockSource::PLL => self.pll.get_frequency().unwrap(),
+            SysClockSource::HSE => self.hse.get_frequency().unwrap() as usize,
         }
     }
 
@@ -439,7 +456,12 @@ impl<'a> Clocks<'a> {
                     return Err(ErrorCode::FAIL);
                 }
             }
-            _ => (),
+            MCO1Source::HSI => {}
+            MCO1Source::HSE => {
+                if self.hse.is_enabled() {
+                    return Err(ErrorCode::FAIL);
+                }
+            }
         }
 
         self.rcc.set_mco1_clock_source(source);
@@ -465,6 +487,11 @@ impl<'a> Clocks<'a> {
                 }
             }
             MCO1Source::HSI => (),
+            MCO1Source::HSE => {
+                if self.hse.is_enabled() {
+                    return Err(ErrorCode::FAIL);
+                }
+            }
         }
 
         self.rcc.set_mco1_clock_divider(divider);
@@ -475,6 +502,26 @@ impl<'a> Clocks<'a> {
     /// Get MCO1 divider
     pub fn get_mco1_clock_divider(&self) -> MCO1Divider {
         self.rcc.get_mco1_clock_divider()
+    }
+
+    /// tries to compute the nominal frequency of each clock domain
+    pub fn compute_nominal_frequency(&self) {
+        self.rcc
+            .compute_nominal_frequency(self.hse.get_frequency())
+            .unwrap()
+    }
+
+    /// In case the clock configuration fails, try to fallback to a safe default (Internal Oscillator).
+    /// If the system clock (HSE or PLL) fails, the HW will automatically fallback to the Internal
+    /// Oscillator, but other structures need to be notified.
+    pub fn clock_fallback(&self) {
+        let _ = self.set_sys_clock_source(SysClockSource::HSI);
+        let _ = self.pll.disable();
+        let _ = self
+            .flash
+            .unwrap_or_panic()
+            .set_latency(HSI_FREQUENCY)
+            .unwrap();
     }
 }
 
@@ -568,9 +615,9 @@ pub mod tests {
         assert_eq!(Ok(()), clocks.set_ahb_prescaler(AHBPrescaler::DivideBy1));
         assert_eq!(Ok(()), clocks.set_apb1_prescaler(APBPrescaler::DivideBy1));
         assert_eq!(Ok(()), clocks.set_apb2_prescaler(APBPrescaler::DivideBy1));
-        assert_eq!(HSI_FREQUENCY_MHZ, clocks.get_sys_clock_frequency());
-        assert_eq!(HSI_FREQUENCY_MHZ, clocks.get_apb1_frequency());
-        assert_eq!(HSI_FREQUENCY_MHZ, clocks.get_apb2_frequency());
+        assert_eq!(HSI_FREQUENCY, clocks.get_sys_clock_frequency());
+        assert_eq!(HSI_FREQUENCY, clocks.get_apb1_frequency());
+        assert_eq!(HSI_FREQUENCY, clocks.get_apb2_frequency());
     }
 
     // This macro ensure that the system clock frequency goes back to the default value to prevent
@@ -606,7 +653,15 @@ pub mod tests {
     /// ```
     pub fn test_prescalers(clocks: &Clocks) {
         // This test requires a bit of setup. A system clock running at 160MHz is configured.
-        check_and_panic!(Ok(()), clocks.pll.set_frequency(HIGH_FREQUENCY), clocks);
+        check_and_panic!(
+            Ok(()),
+            clocks.pll.prepare_frequnecy(
+                2 * HSI_FREQUENCY,
+                HSI_FREQUENCY,
+                crate::rcc::PllSource::HSI
+            ),
+            clocks
+        );
         check_and_panic!(Ok(()), clocks.pll.enable(), clocks);
         check_and_panic!(
             Ok(()),
@@ -704,19 +759,19 @@ pub mod tests {
         check_and_panic!(SysClockSource::HSI, clocks.get_sys_clock_source(), clocks);
 
         // HSI frequency is 16MHz
-        check_and_panic!(HSI_FREQUENCY_MHZ, clocks.get_sys_clock_frequency(), clocks);
+        check_and_panic!(HSI_FREQUENCY, clocks.get_sys_clock_frequency(), clocks);
 
         // APB1 default prescaler is 1
         check_and_panic!(APBPrescaler::DivideBy1, clocks.get_apb1_prescaler(), clocks);
 
         // APB1 default frequency is 16MHz
-        check_and_panic!(HSI_FREQUENCY_MHZ, clocks.get_apb1_frequency(), clocks);
+        check_and_panic!(HSI_FREQUENCY, clocks.get_apb1_frequency(), clocks);
 
         // APB2 default prescaler is 1
         check_and_panic!(APBPrescaler::DivideBy1, clocks.get_apb1_prescaler(), clocks);
 
         // APB2 default frequency is 16MHz
-        check_and_panic!(HSI_FREQUENCY_MHZ, clocks.get_apb2_frequency(), clocks);
+        check_and_panic!(HSI_FREQUENCY, clocks.get_apb2_frequency(), clocks);
 
         // Attempting to change the system clock source with a disabled source
         check_and_panic!(
@@ -734,7 +789,13 @@ pub mod tests {
 
         // Change the system clock source to a low frequency so that APB prescalers don't need to be
         // changed
-        check_and_panic!(Ok(()), clocks.pll.set_frequency(LOW_FREQUENCY), clocks);
+        check_and_panic!(
+            Ok(()),
+            clocks
+                .pll
+                .prepare_frequnecy(LOW_FREQUENCY, HSI_FREQUENCY, crate::rcc::PllSource::HSI),
+            clocks
+        );
         check_and_panic!(Ok(()), clocks.pll.enable(), clocks);
         check_and_panic!(
             Ok(()),
@@ -762,7 +823,13 @@ pub mod tests {
         // prescaler (freq_APB1 <= APB1_FREQUENCY_LIMIT_MHZ) and APB2 prescaler
         // (freq_APB2 <= APB2_FREQUENCY_LIMIT_MHZ) must fail
         check_and_panic!(Ok(()), clocks.pll.disable(), clocks);
-        check_and_panic!(Ok(()), clocks.pll.set_frequency(HIGH_FREQUENCY), clocks);
+        check_and_panic!(
+            Ok(()),
+            clocks
+                .pll
+                .prepare_frequnecy(HIGH_FREQUENCY, HSI_FREQUENCY, crate::rcc::PllSource::HSI),
+            clocks
+        );
         check_and_panic!(Ok(()), clocks.pll.enable(), clocks);
         check_and_panic!(
             Err(ErrorCode::SIZE),

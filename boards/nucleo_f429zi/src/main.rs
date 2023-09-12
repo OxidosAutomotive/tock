@@ -14,15 +14,18 @@
 
 use capsules_core::virtualizers::virtual_alarm::VirtualMuxAlarm;
 use components::gpio::GpioComponent;
-use kernel::capabilities;
 use kernel::component::Component;
 use kernel::hil::led::LedHigh;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::scheduler::round_robin::RoundRobinSched;
+use kernel::{capabilities, ErrorCode};
 use kernel::{create_capability, debug, static_init};
 
+use stm32f429zi::clocks::hsi::HSI_FREQUENCY;
 use stm32f429zi::gpio::{AlternateFunction, Mode, PinId, PortId};
 use stm32f429zi::interrupt_service::Stm32f429ziDefaultPeripherals;
+
+use stm32f429zi::rcc::PllSource;
 
 /// Support routines for debugging I/O.
 pub mod io;
@@ -257,12 +260,35 @@ unsafe fn set_pin_primary_functions(
     });
 }
 
+fn try_setup_clocks(clocks: &stm32f429zi::clocks::Clocks) -> Result<(), ErrorCode> {
+    const DESIRED_FREQ: usize = 150_000_000;
+    clocks
+        .pll
+        .prepare_frequnecy(DESIRED_FREQ, HSI_FREQUENCY, PllSource::HSI)?;
+
+    clocks.set_apb1_prescaler(stm32f429zi::rcc::APBPrescaler::DivideBy8)?;
+    clocks.set_apb2_prescaler(stm32f429zi::rcc::APBPrescaler::DivideBy8)?;
+    clocks.pll.enable()?;
+
+    clocks.set_sys_clock_source(stm32f429zi::rcc::SysClockSource::PLL)?;
+    Ok(())
+}
+fn setup_clocks(clocks: &stm32f429zi::clocks::Clocks) {
+    if let Err(errorcode) = try_setup_clocks(clocks) {
+        debug!("Clock setup failed {:?}", errorcode);
+        clocks.clock_fallback()
+    };
+    clocks.compute_nominal_frequency();
+}
+
 /// Helper function for miscellaneous peripheral functions
 unsafe fn setup_peripherals(
     tim2: &stm32f429zi::tim2::Tim2,
     trng: &stm32f429zi::trng::Trng,
     can1: &'static stm32f429zi::can::Can,
+    clocks: &stm32f429zi::clocks::Clocks,
 ) {
+    setup_clocks(clocks);
     // USART3 IRQn is 39
     cortexm4::nvic::Nvic::new(stm32f429zi::nvic::USART3).enable();
 
@@ -305,7 +331,7 @@ unsafe fn create_peripherals() -> (
 
     let peripherals = static_init!(
         Stm32f429ziDefaultPeripherals,
-        Stm32f429ziDefaultPeripherals::new(rcc, exti, dma1, dma2)
+        Stm32f429ziDefaultPeripherals::new(rcc, exti, dma1, dma2, None)
     );
     (peripherals, syscfg, dma1)
 }
@@ -321,7 +347,12 @@ pub unsafe fn main() {
     peripherals.init();
     let base_peripherals = &peripherals.stm32f4;
 
-    setup_peripherals(&base_peripherals.tim2, &peripherals.trng, &peripherals.can1);
+    setup_peripherals(
+        &base_peripherals.tim2,
+        &peripherals.trng,
+        &peripherals.can1,
+        &peripherals.stm32f4.clocks,
+    );
 
     set_pin_primary_functions(syscfg, &base_peripherals.gpio_ports);
 
@@ -624,6 +655,7 @@ pub unsafe fn main() {
     // //
     // // See comment in `boards/imix/src/main.rs`
     // virtual_uart_rx_test::run_virtual_uart_receive(mux_uart);
+    //stm32f429zi::clocks::tests::run_all(&peripherals.stm32f4.clocks);
 
     debug!("Initialization complete. Entering main loop");
 
