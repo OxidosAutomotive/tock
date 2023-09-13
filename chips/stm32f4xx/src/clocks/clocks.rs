@@ -589,7 +589,7 @@ impl<'a> Clocks<'a> {
 pub mod tests {
     use super::*;
 
-    const LOW_FREQUENCY: usize = 25;
+    const LOW_FREQUENCY: usize = 25_000_000;
     #[cfg(not(any(
         feature = "stm32f401",
         feature = "stm32f410",
@@ -598,7 +598,7 @@ pub mod tests {
         feature = "stm32f413",
         feature = "stm32f423"
     )))]
-    const HIGH_FREQUENCY: usize = 112;
+    const HIGH_FREQUENCY: usize = 112_000_000;
     #[cfg(any(
         feature = "stm32f401",
         feature = "stm32f410",
@@ -607,9 +607,10 @@ pub mod tests {
         feature = "stm32f413",
         feature = "stm32f423"
     ))]
-    const HIGH_FREQUENCY: usize = 80;
+    const HIGH_FREQUENCY: usize = 80_000_000;
 
     fn set_default_configuration(clocks: &Clocks) {
+        // the PLL might be misconfigured, make sure that the system clock and UART run on internal clock
         assert_eq!(Ok(()), clocks.set_sys_clock_source(SysClockSource::HSI));
         assert_eq!(Ok(()), clocks.pll.disable());
         assert_eq!(Ok(()), clocks.set_ahb_prescaler(AHBPrescaler::DivideBy1));
@@ -618,6 +619,7 @@ pub mod tests {
         assert_eq!(HSI_FREQUENCY, clocks.get_sys_clock_frequency());
         assert_eq!(HSI_FREQUENCY, clocks.get_apb1_frequency());
         assert_eq!(HSI_FREQUENCY, clocks.get_apb2_frequency());
+        clocks.compute_nominal_frequency();
     }
 
     // This macro ensure that the system clock frequency goes back to the default value to prevent
@@ -655,11 +657,9 @@ pub mod tests {
         // This test requires a bit of setup. A system clock running at 160MHz is configured.
         check_and_panic!(
             Ok(()),
-            clocks.pll.prepare_frequnecy(
-                2 * HSI_FREQUENCY,
-                HSI_FREQUENCY,
-                crate::rcc::PllSource::HSI
-            ),
+            clocks
+                .pll
+                .prepare_frequnecy(HIGH_FREQUENCY, HSI_FREQUENCY, crate::rcc::PllSource::HSI),
             clocks
         );
         check_and_panic!(Ok(()), clocks.pll.enable(), clocks);
@@ -979,6 +979,8 @@ pub mod tests {
         debug!("");
         debug!("===============================================");
         debug!("Testing clocks...");
+
+        set_default_configuration(clocks);
 
         crate::clocks::hsi::tests::run(&clocks.hsi);
         crate::clocks::pll::tests::run(&clocks.pll);

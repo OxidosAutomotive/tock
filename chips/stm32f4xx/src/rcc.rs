@@ -710,10 +710,10 @@ register_bitfields![u32,
 const RCC_BASE: StaticRef<RccRegisters> =
     unsafe { StaticRef::new(0x40023800 as *const RccRegisters) };
 
-// Default values when the hardware is reset. Uncomment if you need them.
-//pub(crate) const RESET_PLLM_VALUE: usize = PLLM::DivideBy16; // M = 16
-//pub(crate) const RESET_PLLP_VALUE: PLLP = PLLP::DivideBy2; // P = 2
-//pub(crate) const RESET_PLLQ_VALUE: PLLQ = PLLQ::DivideBy4; // Q = 4
+// Default values when the hardware is reset.
+pub(crate) const RESET_PLLM_VALUE: usize = 16; // M = 16
+pub(crate) const RESET_PLLP_VALUE: PLLP = PLLP::DivideBy2; // P = 2
+pub(crate) const RESET_PLLQ_VALUE: PLLQ = PLLQ::DivideBy4; // Q = 4
 pub(crate) const RESET_PLLN_VALUE: usize = 0b011_000_000; // N = 192
 
 // Default PLL configuration. See Rcc::init_pll_clock() for more details.
