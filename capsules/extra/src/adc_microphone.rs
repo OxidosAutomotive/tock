@@ -17,21 +17,21 @@ enum State {
     ReadingSPL,
 }
 
-pub struct AdcMicrophone<'a, P: gpio::Pin> {
+pub struct AdcMicrophone<'a, P: gpio::Pin, C: SoundPressureClient> {
     adc: &'a dyn adc::AdcChannel<'a>,
     enable_pin: Option<&'a P>,
-    spl_client: OptionalCell<&'a dyn SoundPressureClient>,
+    spl_client: OptionalCell<&'a C>,
     spl_buffer: TakeCell<'a, [u16]>,
     spl_pos: Cell<usize>,
     state: Cell<State>,
 }
 
-impl<'a, P: gpio::Pin> AdcMicrophone<'a, P> {
+impl<'a, P: gpio::Pin, C: SoundPressureClient> AdcMicrophone<'a, P, C> {
     pub fn new(
         adc: &'a dyn adc::AdcChannel<'a>,
         enable_pin: Option<&'a P>,
         spl_buffer: &'a mut [u16],
-    ) -> AdcMicrophone<'a, P> {
+    ) -> AdcMicrophone<'a, P, C> {
         enable_pin.map(|pin| pin.make_output());
         AdcMicrophone {
             adc,
@@ -58,7 +58,7 @@ impl<'a, P: gpio::Pin> AdcMicrophone<'a, P> {
     }
 }
 
-impl<'a, P: gpio::Pin> SoundPressure<'a> for AdcMicrophone<'a, P> {
+impl<'a, P: gpio::Pin, C: SoundPressureClient> SoundPressure<'a, C> for AdcMicrophone<'a, P, C> {
     fn read_sound_pressure(&self) -> Result<(), ErrorCode> {
         if self.state.get() == State::Idle {
             // self.enable_pin.map (|pin| pin.set ());
@@ -71,7 +71,7 @@ impl<'a, P: gpio::Pin> SoundPressure<'a> for AdcMicrophone<'a, P> {
         }
     }
 
-    fn set_client(&self, client: &'a dyn SoundPressureClient) {
+    fn set_client(&self, client: &'a C) {
         self.spl_client.set(client);
     }
 
@@ -86,7 +86,7 @@ impl<'a, P: gpio::Pin> SoundPressure<'a> for AdcMicrophone<'a, P> {
     }
 }
 
-impl<'a, P: gpio::Pin> adc::Client for AdcMicrophone<'a, P> {
+impl<'a, P: gpio::Pin, C: SoundPressureClient> adc::Client for AdcMicrophone<'a, P, C> {
     fn sample_ready(&self, sample: u16) {
         if self.state.get() == State::ReadingSPL {
             if self.spl_buffer.map_or(false, |buffer| {

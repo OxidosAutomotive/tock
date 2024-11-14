@@ -12,7 +12,7 @@ use kernel::hil::i2c;
 
 #[macro_export]
 macro_rules! lps22hb_component_static {
-    ($I:ty $(,)?) => {{
+    ($I:ty, $(,)?) => {{
         let i2c_device =
             kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::I2CDevice<$I>);
         let lps22hb = kernel::static_buf!(

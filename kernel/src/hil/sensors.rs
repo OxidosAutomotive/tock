@@ -213,7 +213,7 @@ pub trait NineDofClient {
 }
 
 /// Basic Interface for Sound Pressure
-pub trait SoundPressure<'a> {
+pub trait SoundPressure<'a, S: SoundPressureClient> {
     /// Read the sound pressure level
     fn read_sound_pressure(&self) -> Result<(), ErrorCode>;
 
@@ -232,7 +232,7 @@ pub trait SoundPressure<'a> {
     fn disable(&self) -> Result<(), ErrorCode>;
 
     /// Set the client
-    fn set_client(&self, client: &'a dyn SoundPressureClient);
+    fn set_client(&self, client: &'a S);
 }
 
 pub trait SoundPressureClient {

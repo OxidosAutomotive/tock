@@ -57,8 +57,10 @@
 //! ```
 
 use core::cell::Cell;
+use core::marker::PhantomData;
 use kernel::grant::{AllowRoCount, AllowRwCount, Grant, UpcallCount};
 use kernel::hil;
+use kernel::hil::sensors::{SoundPressure, SoundPressureClient};
 use kernel::syscall::{CommandReturn, SyscallDriver};
 use kernel::{ErrorCode, ProcessId};
 
@@ -72,21 +74,73 @@ pub struct App {
     enable: bool,
 }
 
-pub struct SoundPressureSensor<'a> {
-    driver: &'a dyn hil::sensors::SoundPressure<'a>,
-    apps: Grant<App, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<0>>,
-    busy: Cell<bool>,
+#[macro_export]
+macro_rules! sound_pressure_driver {
+    (@name => $name: ident, @sound_pressure => $sp: ty) => {
+        use capsules_extra::sound_pressure::{App, SoundPressureSensor};
+        use kernel::grant::{AllowRoCount, AllowRwCount, Grant, UpcallCount};
+        use kernel::hil;
+        use kernel::syscall::{CommandReturn, SyscallDriver};
+        use kernel::{ErrorCode, ProcessId};
+
+        #[repr(transparent)]
+        struct $name<'a> {
+            sound_pressure: SoundPressureSensor<'a, $sp, $name<'a>>,
+        }
+
+        impl<'a> $name<'a> {
+            pub fn new(
+                driver: &'a $sp,
+                grant: Grant<App, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<0>>,
+            ) -> $name<'a> {
+                $name {
+                    sound_pressure: SoundPressureSensor::new(driver, grant),
+                }
+            }
+        }
+
+        impl<'a> hil::sensors::SoundPressureClient for $name<'a> {
+            fn callback(&self, ret: Result<(), ErrorCode>, sound_val: u8) {
+                self.sound_pressure.callback(ret, sound_val)
+            }
+        }
+
+        impl<'a> SyscallDriver for $name<'a> {
+            fn command(
+                &self,
+                command_num: usize,
+                data1: usize,
+                data2: usize,
+                processid: ProcessId,
+            ) -> CommandReturn {
+                self.sound_pressure
+                    .command(command_num, data1, data2, processid)
+            }
+
+            fn allocate_grant(&self, processid: ProcessId) -> Result<(), kernel::process::Error> {
+                self.sound_pressure.allocate_grant(processid)
+            }
+        }
+    };
 }
 
-impl<'a> SoundPressureSensor<'a> {
+pub struct SoundPressureSensor<'a, S: SoundPressure<'a, C>, C: SoundPressureClient> {
+    driver: &'a S,
+    apps: Grant<App, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<0>>,
+    busy: Cell<bool>,
+    _client: PhantomData<C>,
+}
+
+impl<'a, S: SoundPressure<'a, C>, C: SoundPressureClient> SoundPressureSensor<'a, S, C> {
     pub fn new(
-        driver: &'a dyn hil::sensors::SoundPressure<'a>,
+        driver: &'a S,
         grant: Grant<App, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<0>>,
-    ) -> SoundPressureSensor<'a> {
+    ) -> SoundPressureSensor<'a, S, C> {
         SoundPressureSensor {
             driver,
             apps: grant,
             busy: Cell::new(false),
+            _client: PhantomData,
         }
     }
 
@@ -126,7 +180,9 @@ impl<'a> SoundPressureSensor<'a> {
     }
 }
 
-impl hil::sensors::SoundPressureClient for SoundPressureSensor<'_> {
+impl<'a, S: SoundPressure<'a, C>, C: SoundPressureClient> hil::sensors::SoundPressureClient
+    for SoundPressureSensor<'a, S, C>
+{
     fn callback(&self, ret: Result<(), ErrorCode>, sound_val: u8) {
         for cntr in self.apps.iter() {
             cntr.enter(|app, upcalls| {
@@ -142,7 +198,9 @@ impl hil::sensors::SoundPressureClient for SoundPressureSensor<'_> {
     }
 }
 
-impl SyscallDriver for SoundPressureSensor<'_> {
+impl<'a, S: SoundPressure<'a, C>, C: SoundPressureClient> SyscallDriver
+    for SoundPressureSensor<'a, S, C>
+{
     fn command(
         &self,
         command_num: usize,

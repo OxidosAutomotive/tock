@@ -14,8 +14,10 @@
 
 use core::ptr::{addr_of, addr_of_mut};
 
+use capsules_extra::adc_microphone::AdcMicrophone;
 use kernel::capabilities;
 use kernel::component::Component;
+use kernel::hil::sensors::SoundPressure;
 use kernel::hil::time::Counter;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::scheduler::round_robin::RoundRobinSched;
@@ -91,6 +93,11 @@ type RngDriver = components::rng::RngComponentType<nrf52833::trng::Trng<'static>
 type Ieee802154RawDriver =
     components::ieee802154::Ieee802154RawComponentType<nrf52833::ieee802154_radio::Radio<'static>>;
 
+capsules_extra::sound_pressure_driver!(
+    @name => SoundPressureDriver,
+    @sound_pressure => AdcMicrophone<'a, nrf52833::gpio::GPIOPin<'a>, SoundPressureDriver<'a>>
+);
+
 /// Supported drivers by the platform
 pub struct MicroBit {
     ble_radio: &'static capsules_extra::ble_advertising_driver::BLE<
@@ -147,7 +154,7 @@ pub struct MicroBit {
     >,
     pwm: &'static capsules_extra::pwm::Pwm<'static, 1>,
     app_flash: &'static capsules_extra::app_flash_driver::AppFlash<'static>,
-    sound_pressure: &'static capsules_extra::sound_pressure::SoundPressureSensor<'static>,
+    sound_pressure: &'static SoundPressureDriver<'static>,
 
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
@@ -572,17 +579,29 @@ unsafe fn start() -> (
         // buffer size
         50,
         // gpio
-        nrf52833::gpio::GPIOPin
+        nrf52833::gpio::GPIOPin,
+        // client
+        SoundPressureDriver,
     ));
 
     nrf52833_peripherals.gpio_port[LED_MICROPHONE_PIN].set_high_drive(true);
 
-    let sound_pressure = components::sound_pressure::SoundPressureComponent::new(
-        board_kernel,
-        capsules_extra::sound_pressure::DRIVER_NUM,
-        adc_microphone,
-    )
-    .finalize(components::sound_pressure_component_static!());
+    // let sound_pressure = components::sound_pressure::SoundPressureComponent::new(
+    //     board_kernel,
+    //     capsules_extra::sound_pressure::DRIVER_NUM,
+    //     adc_microphone,
+    // )
+    // .finalize(components::sound_pressure_component_static!());
+
+    let grant_cap = create_capability!(capabilities::MemoryAllocationCapability);
+    let sound_pressure = static_init!(
+        SoundPressureDriver,
+        SoundPressureDriver::new(
+            adc_microphone,
+            board_kernel.create_grant(capsules_extra::sound_pressure::DRIVER_NUM, &grant_cap)
+        )
+    );
+    adc_microphone.set_client(sound_pressure);
 
     //--------------------------------------------------------------------------
     // STORAGE

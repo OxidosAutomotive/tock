@@ -32,18 +32,20 @@
 
 use capsules_core::virtualizers::virtual_adc::AdcDevice;
 use capsules_extra::adc_microphone::AdcMicrophone;
+use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use kernel::component::Component;
 use kernel::hil::adc::{self, AdcChannel};
 use kernel::hil::gpio;
+use kernel::hil::sensors::SoundPressureClient;
 
 #[macro_export]
 macro_rules! adc_microphone_component_static {
-    ($A:ty, $LEN:literal, $P: ty $(,)?) => {{
+    ($A:ty, $LEN:literal, $P: ty, $C: ty $(,)?) => {{
         let adc_device = components::adc_component_static!($A);
         let buffer = kernel::static_buf!([u16; $LEN]);
         let adc_microphone =
-            kernel::static_buf!(capsules_extra::adc_microphone::AdcMicrophone<'static, $P>);
+            kernel::static_buf!(capsules_extra::adc_microphone::AdcMicrophone<'static, $P, $C>);
 
         (adc_device, buffer, adc_microphone)
     };};
@@ -52,38 +54,49 @@ macro_rules! adc_microphone_component_static {
 pub struct AdcMicrophoneComponent<
     A: 'static + adc::Adc<'static>,
     P: 'static + gpio::Pin,
+    C: 'static + SoundPressureClient,
     const BUF_LEN: usize,
 > {
     adc_mux: &'static capsules_core::virtualizers::virtual_adc::MuxAdc<'static, A>,
     adc_channel: A::Channel,
     pin: Option<&'static P>,
+    _client: PhantomData<C>,
 }
 
-impl<A: 'static + adc::Adc<'static>, P: 'static + gpio::Pin, const BUF_LEN: usize>
-    AdcMicrophoneComponent<A, P, BUF_LEN>
+impl<
+        A: 'static + adc::Adc<'static>,
+        P: 'static + gpio::Pin,
+        C: SoundPressureClient,
+        const BUF_LEN: usize,
+    > AdcMicrophoneComponent<A, P, C, BUF_LEN>
 {
     pub fn new(
         adc_mux: &'static capsules_core::virtualizers::virtual_adc::MuxAdc<'static, A>,
         adc_channel: A::Channel,
         pin: Option<&'static P>,
-    ) -> AdcMicrophoneComponent<A, P, BUF_LEN> {
+    ) -> AdcMicrophoneComponent<A, P, C, BUF_LEN> {
         AdcMicrophoneComponent {
             adc_mux,
             adc_channel,
             pin,
+            _client: PhantomData,
         }
     }
 }
 
-impl<A: 'static + adc::Adc<'static>, P: 'static + gpio::Pin, const BUF_LEN: usize> Component
-    for AdcMicrophoneComponent<A, P, BUF_LEN>
+impl<
+        A: 'static + adc::Adc<'static>,
+        P: 'static + gpio::Pin,
+        C: SoundPressureClient,
+        const BUF_LEN: usize,
+    > Component for AdcMicrophoneComponent<A, P, C, BUF_LEN>
 {
     type StaticInput = (
         &'static mut MaybeUninit<AdcDevice<'static, A>>,
         &'static mut MaybeUninit<[u16; BUF_LEN]>,
-        &'static mut MaybeUninit<AdcMicrophone<'static, P>>,
+        &'static mut MaybeUninit<AdcMicrophone<'static, P, C>>,
     );
-    type Output = &'static AdcMicrophone<'static, P>;
+    type Output = &'static AdcMicrophone<'static, P, C>;
 
     fn finalize(self, s: Self::StaticInput) -> Self::Output {
         let adc_device =
