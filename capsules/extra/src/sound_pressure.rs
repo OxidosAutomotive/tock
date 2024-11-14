@@ -89,6 +89,7 @@ macro_rules! sound_pressure_driver {
         }
 
         impl<'a> $name<'a> {
+            #[inline]
             pub fn new(
                 driver: &'a $sp,
                 grant: Grant<App, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<0>>,
@@ -100,12 +101,14 @@ macro_rules! sound_pressure_driver {
         }
 
         impl<'a> hil::sensors::SoundPressureClient for $name<'a> {
+            #[inline]
             fn callback(&self, ret: Result<(), ErrorCode>, sound_val: u8) {
                 self.sound_pressure.callback(ret, sound_val)
             }
         }
 
         impl<'a> SyscallDriver for $name<'a> {
+            #[inline]
             fn command(
                 &self,
                 command_num: usize,
@@ -117,6 +120,7 @@ macro_rules! sound_pressure_driver {
                     .command(command_num, data1, data2, processid)
             }
 
+            #[inline]
             fn allocate_grant(&self, processid: ProcessId) -> Result<(), kernel::process::Error> {
                 self.sound_pressure.allocate_grant(processid)
             }
