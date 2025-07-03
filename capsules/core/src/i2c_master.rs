@@ -20,8 +20,15 @@ pub const DRIVER_NUM: usize = driver::NUM::I2cMaster as usize;
 /// Ids for read-write allow buffers
 mod rw_allow {
     pub const BUFFER: usize = 1;
-    /// The number of allow buffers the kernel stores for this grant
+    /// The number of read-write allow buffers the kernel stores for this grant
     pub const COUNT: u8 = 2;
+}
+
+/// Ids for read-only allow buffers
+mod ro_allow {
+    pub const BUFFER: usize = 0;
+    /// The number of read-only allow buffers the kernel stores for this grant
+    pub const COUNT: u8 = 1;
 }
 
 #[derive(Default)]
@@ -41,14 +48,24 @@ pub struct I2CMasterDriver<'a, I: i2c::I2CMaster<'a>> {
     i2c: &'a I,
     buf: TakeCell<'static, [u8]>,
     tx: MapCell<Transaction>,
-    apps: Grant<App, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<{ rw_allow::COUNT }>>,
+    apps: Grant<
+        App,
+        UpcallCount<1>,
+        AllowRoCount<{ ro_allow::COUNT }>,
+        AllowRwCount<{ rw_allow::COUNT }>,
+    >,
 }
 
 impl<'a, I: i2c::I2CMaster<'a>> I2CMasterDriver<'a, I> {
     pub fn new(
         i2c: &'a I,
         buf: &'static mut [u8],
-        apps: Grant<App, UpcallCount<1>, AllowRoCount<0>, AllowRwCount<{ rw_allow::COUNT }>>,
+        apps: Grant<
+            App,
+            UpcallCount<1>,
+            AllowRoCount<{ ro_allow::COUNT }>,
+            AllowRwCount<{ rw_allow::COUNT }>,
+        >,
     ) -> I2CMasterDriver<'a, I> {
         I2CMasterDriver {
             i2c,
@@ -67,43 +84,66 @@ impl<'a, I: i2c::I2CMaster<'a>> I2CMasterDriver<'a, I> {
         wlen: usize,
         rlen: usize,
     ) -> Result<(), ErrorCode> {
-        kernel_data
-            .get_readwrite_processbuffer(rw_allow::BUFFER)
-            .and_then(|buffer| {
-                buffer.enter(|app_buffer| {
-                    self.buf.take().map_or(Err(ErrorCode::NOMEM), |buffer| {
-                        app_buffer[..wlen].copy_to_slice(&mut buffer[..wlen]);
+        self.buf
+            .take()
+            .ok_or(ErrorCode::NOMEM)
+            .and_then(|cap_buffer| {
+                let res = if command == Cmd::Write || command == Cmd::WriteRead {
+                    kernel_data
+                        .get_readonly_processbuffer(ro_allow::BUFFER)
+                        .and_then(|buffer| {
+                            buffer.enter(|app_buffer| {
+                                app_buffer[..wlen].copy_to_slice(&mut cap_buffer[..wlen]);
+                                Ok(())
+                            })
+                        })
+                        .unwrap_or(Err(ErrorCode::INVAL))
+                } else if command == Cmd::WriteReadInPlace {
+                    kernel_data
+                        .get_readwrite_processbuffer(ro_allow::BUFFER)
+                        .and_then(|buffer| {
+                            buffer.enter(|app_buffer| {
+                                app_buffer[..wlen].copy_to_slice(&mut cap_buffer[..wlen]);
+                                Ok(())
+                            })
+                        })
+                        .unwrap_or(Err(ErrorCode::INVAL))
+                } else {
+                    Ok(())
+                };
 
-                        let read_len = if rlen == 0 {
-                            OptionalCell::empty()
-                        } else {
-                            OptionalCell::new(rlen)
-                        };
-                        self.tx.put(Transaction {
-                            processid,
-                            read_len,
-                        });
+                self.buf.put(Some(cap_buffer));
+                res
+            })?;
 
-                        let res = match command {
-                            Cmd::Ping => {
-                                self.buf.put(Some(buffer));
-                                return Err(ErrorCode::INVAL);
-                            }
-                            Cmd::Write => self.i2c.write(addr, buffer, wlen),
-                            Cmd::Read => self.i2c.read(addr, buffer, rlen),
-                            Cmd::WriteRead => self.i2c.write_read(addr, buffer, wlen, rlen),
-                        };
-                        match res {
-                            Ok(()) => Ok(()),
-                            Err((error, data)) => {
-                                self.buf.put(Some(data));
-                                Err(error.into())
-                            }
-                        }
-                    })
-                })
-            })
-            .unwrap_or(Err(ErrorCode::INVAL))
+        let read_len = if rlen == 0 {
+            OptionalCell::empty()
+        } else {
+            OptionalCell::new(rlen)
+        };
+        self.tx.put(Transaction {
+            processid,
+            read_len,
+        });
+
+        self.buf.take().map_or(Err(ErrorCode::NOMEM), |buffer| {
+            let res = match command {
+                Cmd::Ping => return Err(ErrorCode::INVAL),
+                Cmd::Write => self.i2c.write(addr, buffer, wlen),
+                Cmd::Read => self.i2c.read(addr, buffer, rlen),
+                Cmd::WriteReadInPlace | Cmd::WriteRead => {
+                    self.i2c.write_read(addr, buffer, wlen, rlen)
+                }
+            };
+
+            match res {
+                Ok(()) => Ok(()),
+                Err((error, data)) => {
+                    self.buf.put(Some(data));
+                    Err(error.into())
+                }
+            }
+        })
     }
 }
 
@@ -115,7 +155,8 @@ pub enum Cmd {
     Ping = 0,
     Write = 1,
     Read = 2,
-    WriteRead = 3,
+    WriteReadInPlace = 3,
+    WriteRead = 4,
 }
 }
 
@@ -161,6 +202,24 @@ impl<'a, I: i2c::I2CMaster<'a>> SyscallDriver for I2CMasterDriver<'a, I> {
                             .into()
                     })
                     .unwrap_or_else(|err| err.into()),
+                Cmd::WriteReadInPlace => {
+                    let addr = arg1 as u8;
+                    let write_len = arg1 >> 8; // can extend to 24 bit write length
+                    let read_len = arg2; // can extend to 32 bit read length
+                    self.apps
+                        .enter(processid, |_, kernel_data| {
+                            self.operation(
+                                processid,
+                                kernel_data,
+                                Cmd::WriteReadInPlace,
+                                addr,
+                                write_len,
+                                read_len,
+                            )
+                            .into()
+                        })
+                        .unwrap_or_else(|err| err.into())
+                }
                 Cmd::WriteRead => {
                     let addr = arg1 as u8;
                     let write_len = arg1 >> 8; // can extend to 24 bit write length
