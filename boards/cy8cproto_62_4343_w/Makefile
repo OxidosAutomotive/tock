@@ -14,7 +14,7 @@ install: flash
 .PHONY: install
 
 flash: release
-	${OPENOCD_ROOT}/bin/openocd $(OPENOCD_OPTIONS) -c "program $(KERNEL); verify_image $(KERNEL); reset; shutdown"
+	cargo flash --chip CY8C624AAZI-S2D44 --path $(KERNEL)
 .PHONY: flash
 
 .PHONY: program
@@ -24,4 +24,4 @@ ifeq ($(APP),)
 endif
 	arm-none-eabi-objcopy --set-section-flags .apps=LOAD,ALLOC $(KERNEL) $(KERNEL_WITH_APP)
 	arm-none-eabi-objcopy --update-section .apps=$(APP) $(KERNEL_WITH_APP)
-	${OPENOCD_ROOT}/bin/openocd $(OPENOCD_OPTIONS) -c "program $(KERNEL_WITH_APP); verify_image $(KERNEL_WITH_APP); reset; shutdown"
+	cargo flash --chip CY8C624AAZI-S2D44 --path $(KERNEL_WITH_APP)
