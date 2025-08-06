@@ -53,6 +53,7 @@ pub mod cpuss;
 pub mod gpio;
 pub mod hsiom;
 pub mod peri;
+pub mod sar;
 pub mod scb;
 pub mod srss;
 pub mod tcpwm;

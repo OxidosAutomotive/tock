@@ -525,6 +525,7 @@ const CPUSS_BASE: StaticRef<CpussRegisters> =
 
 const SCB5_ID: usize = 44;
 const TCPWM0_ID: usize = 123;
+const SAR_ID: usize = 155;
 
 pub struct Cpuss {
     registers: StaticRef<CpussRegisters>,
@@ -558,6 +559,12 @@ impl Cpuss {
     pub fn enable_int_for_gpio0(&self) {
         self.registers.cm0_system_int_ctl[15].modify(
             CM0_SYSTEM_INT_CTL::CPU_INT_IDX.val(1) + CM0_SYSTEM_INT_CTL::CPU_INT_VALID::SET,
+        );
+    }
+
+    pub fn enable_int_for_adc(&self) {
+        self.registers.cm0_system_int_ctl[SAR_ID].modify(
+            CM0_SYSTEM_INT_CTL::CPU_INT_IDX.val(2) + CM0_SYSTEM_INT_CTL::CPU_INT_VALID::SET,
         );
     }
 }

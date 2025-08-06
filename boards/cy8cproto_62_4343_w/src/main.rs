@@ -25,6 +25,7 @@ use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::process::ProcessArray;
 use kernel::scheduler::round_robin::RoundRobinSched;
 use kernel::{capabilities, create_capability, static_init};
+use psoc62xa::sar::{self, Adc};
 
 #[allow(unused)]
 use psoc62xa::{
@@ -115,6 +116,7 @@ fn init_clocks(peripherals: &PsoC62xaDefaultPeripherals) {
     peripherals.cpuss.init_clock();
     peripherals.peri.init_uart_clock();
     peripherals.peri.init_alarm_clock();
+    peripherals.peri.init_adc_clock();
 }
 
 /// Main function called after RAM initialized.
@@ -135,7 +137,10 @@ pub unsafe fn main() {
     peripherals.cpuss.enable_int_for_scb5();
     peripherals.cpuss.enable_int_for_tcpwm00();
     peripherals.cpuss.enable_int_for_gpio0();
+    peripherals.cpuss.enable_int_for_adc();
     cortexm0p::nvic::enable_all();
+
+    peripherals.adc.init();
 
     //--------------------------------------------------------------------------
     // UART & CONSOLE & DEBUG
@@ -244,6 +249,12 @@ pub unsafe fn main() {
             77 => peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P9_5),
             78 => peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P9_6),
             79 => peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P9_7),
+            80 => peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P10_0),
+            // 81 => peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P10_1),
+            // 82 => peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P10_2),
+            83 => peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P10_3),
+            // 84 => peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P10_4),
+            // 85 => peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P10_5),
             96 => peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P12_0),
             97 => peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P12_1),
             99 => peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P12_3),
@@ -272,6 +283,30 @@ pub unsafe fn main() {
         ),
     )
     .finalize(components::button_component_static!(GpioPin));
+
+    //--------------------------------------------------------------------------
+    // TEMPERATURE
+    //--------------------------------------------------------------------------
+
+    use kernel::hil::gpio::{Configure, Output};
+    let adc_pin_1 = peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P10_1);
+    adc_pin_1.disable_input();
+    adc_pin_1.configure_drive_mode(psoc62xa::gpio::DriveMode::HighZ);
+
+    let adc_pin_2 = peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P10_2);
+    adc_pin_2.disable_input();
+    adc_pin_2.configure_drive_mode(psoc62xa::gpio::DriveMode::HighZ);
+
+    let temp_vdd = peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P10_0);
+    temp_vdd.make_output();
+    temp_vdd.set();
+
+    let temp_gnd = peripherals.gpio.get_pin(psoc62xa::gpio::PsocPin::P10_3);
+    temp_gnd.make_output();
+    temp_gnd.clear();
+
+    let mux_adc = components::adc::AdcMuxComponent::new(&peripherals.adc)
+        .finalize(components::adc_mux_component_static!(sar::Adc));
 
     //--------------------------------------------------------------------------
     // FINAL SETUP AND BOARD BOOT

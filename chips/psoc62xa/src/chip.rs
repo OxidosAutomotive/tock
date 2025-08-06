@@ -5,6 +5,7 @@
 use kernel::platform::chip::Chip;
 use kernel::platform::chip::InterruptService;
 
+use crate::sar;
 use crate::{cpuss, gpio, hsiom, peri, scb, srss, tcpwm};
 use cortexm0p::{CortexM0P, CortexMVariant};
 
@@ -84,6 +85,7 @@ pub struct PsoC62xaDefaultPeripherals<'a> {
     pub scb: scb::Scb<'a>,
     pub srss: srss::Srss,
     pub tcpwm: tcpwm::Tcpwm0<'a>,
+    pub adc: sar::Adc<'a>,
 }
 
 impl PsoC62xaDefaultPeripherals<'_> {
@@ -96,6 +98,7 @@ impl PsoC62xaDefaultPeripherals<'_> {
             scb: scb::Scb::new(),
             srss: srss::Srss::new(),
             tcpwm: tcpwm::Tcpwm0::new(),
+            adc: sar::Adc::new(),
         }
     }
 }
@@ -112,6 +115,9 @@ impl InterruptService for PsoC62xaDefaultPeripherals<'_> {
                 // check for all of the GPIO ports on every non-GPIO
                 // releated interrupt.
                 self.gpio.handle_interrupt();
+            }
+            2 => {
+                self.adc.handle_interrupt();
             }
             _ => return false,
         }

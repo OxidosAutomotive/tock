@@ -229,4 +229,23 @@ impl Peri {
             .clock_ctl_15
             .modify(CLOCK_CTL::DIV_SEL.val(0) + CLOCK_CTL::TYPE_SEL::DIV8_0);
     }
+
+    pub fn init_adc_clock(&self) {
+        self.registers
+            .div_cmd
+            .write(DIV_CMD::DISABLE::SET + DIV_CMD::DIV_SEL.val(2) + DIV_CMD::TYPE_SEL::DIV8_0);
+        self.registers
+            .div_8_ctl_2
+            .modify(DIV_8_CTL::INT8_DIV.val(1));
+        self.registers.div_cmd.write(
+            DIV_CMD::ENABLE::SET
+                + DIV_CMD::DIV_SEL.val(2)
+                + DIV_CMD::TYPE_SEL::DIV8_0
+                + DIV_CMD::PA_TYPE_SEL.val(3)
+                + DIV_CMD::PA_DIV_SEL.val(255),
+        );
+        self.registers
+            .clock_ctl_52
+            .modify(CLOCK_CTL::DIV_SEL.val(2) + CLOCK_CTL::TYPE_SEL::DIV8_0);
+    }
 }
