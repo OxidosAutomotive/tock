@@ -496,7 +496,15 @@ impl<'a, P: hil::gpio::Pin, A: hil::time::Alarm<'a>, B: bus::CYW4343xBus<'a>>
                 if data.len() < sdpcm::BdcHeader::SIZE {
                     return;
                 }
-                (_, data) = data.split_at(sdpcm::BdcHeader::SIZE);
+
+                (header, data) = data.split_at(sdpcm::BdcHeader::SIZE);
+                let bdc_hdr = sdpcm::BdcHeader::from_bytes(header);
+                let offset = 4 * bdc_hdr.data_offset as usize;
+                if offset > data.len() {
+                    return;
+                }
+                data = &data[offset..];
+
                 self.eth_client
                     .map(|client| client.received_frame(data, None));
             }
@@ -767,6 +775,7 @@ impl<'a, P: hil::gpio::Pin, A: hil::time::Alarm<'a>, B: bus::CYW4343xBus<'a>> bu
         mut buffer: SubSliceMut<'static, u8>,
         rval: Result<(), kernel::ErrorCode>,
     ) {
+        let len = buffer.len() as u16;
         reset_and_restore_bufs!(self, buffer);
 
         match (self.state.get(), rval) {
@@ -781,7 +790,19 @@ impl<'a, P: hil::gpio::Pin, A: hil::time::Alarm<'a>, B: bus::CYW4343xBus<'a>> bu
             (State::Command(_), Ok(())) if !self.waiting_or_busy() => {
                 self.update_task();
             }
-            (State::Ethernet, _) => todo!(),
+            (State::Ethernet, err) => {
+                self.eth_client.map(|client| {
+                    let (transmission_identifier, frame_buffer) = self.eth_tx_data.take().unwrap();
+                    client.transmit_frame_done(
+                        err,
+                        frame_buffer,
+                        len,
+                        transmission_identifier,
+                        None,
+                    )
+                });
+                self.state.set(State::Idle);
+            }
             _ => {}
         }
     }
