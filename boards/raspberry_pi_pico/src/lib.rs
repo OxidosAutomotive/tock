@@ -274,6 +274,7 @@ pub unsafe fn setup(
             Peripheral::Uart0,
             Peripheral::Uart1,
             Peripheral::UsbCtrl,
+            Peripheral::I2c0,
         ],
         true,
     );
