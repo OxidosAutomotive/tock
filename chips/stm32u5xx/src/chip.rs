@@ -6,6 +6,7 @@
 use crate::dma::{ChannelId, Dma};
 use crate::exti;
 use crate::gpio;
+use crate::hash::Hash;
 use crate::nvic::{
     EXTI13_IRQ, GPDMA1_CH0_IRQ, GPDMA1_CH10_IRQ, GPDMA1_CH11_IRQ, GPDMA1_CH12_IRQ, GPDMA1_CH13_IRQ,
     GPDMA1_CH14_IRQ, GPDMA1_CH15_IRQ, GPDMA1_CH1_IRQ, GPDMA1_CH2_IRQ, GPDMA1_CH3_IRQ,
@@ -34,6 +35,7 @@ pub struct Stm32u5xxDefaultPeripherals<'a> {
     pub dma1: &'a Dma,
     pub gpio_a: gpio::Port<'a>,
     pub gpio_c: gpio::Port<'a>,
+    pub hash: &'a hash::Hash<'a>,
 }
 
 fn enable_tim2_clock() {
@@ -42,7 +44,12 @@ fn enable_tim2_clock() {
 }
 
 impl<'a> Stm32u5xxDefaultPeripherals<'a> {
-    pub fn new(usart1: &'a usart::Usart<'a>, exti: &'a exti::Exti<'a>, dma1: &'a Dma) -> Self {
+    pub fn new(
+        usart1: &'a usart::Usart<'a>,
+        exti: &'a exti::Exti<'a>,
+        dma1: &'a Dma,
+        hash: &'a Hash,
+    ) -> Self {
         Self {
             rcc: rcc::Rcc::new(rcc::RCC_BASE),
             tim2: tim::Tim2::new(tim::TIM2_BASE, enable_tim2_clock),
@@ -61,6 +68,7 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
         self.rcc.enable_gpioc();
         self.rcc.enable_usart1();
         self.rcc.enable_syscfg();
+        self.rcc.enable_hash();
         self.rcc.set_usart1_source_pclk();
         // Link DMA to USART1
         let usart1_channel_tx = self.dma1.request_channel();
@@ -153,6 +161,10 @@ impl InterruptService for Stm32u5xxDefaultPeripherals<'_> {
             }
             GPDMA1_CH15_IRQ => {
                 self.dma1.handle_interrupt(ChannelId::Channel15);
+                true
+            }
+            HASH_IRQ => {
+                self.hash.handle_interupts();
                 true
             }
             _ => false,

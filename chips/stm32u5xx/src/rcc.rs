@@ -106,4 +106,9 @@ impl Rcc {
     pub fn set_usart1_source_pclk(&self) {
         self.registers.ccipr1.modify(CCIPR1::USART1SEL::PCLK);
     }
+
+    pub fn enable_hash(&self) {
+        let val = self.registers.ahb2enr1.get();
+        self.registers.ahb2enr1.set(val | (1 << 17));
+    }
 }
