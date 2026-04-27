@@ -12,3 +12,4 @@ pub const GPDMA1_CH0_IRQ: u32 = 29;
 pub const GPDMA1_CH1_IRQ: u32 = 30;
 pub const TIM2_IRQ: u32 = 45;
 pub const USART1_IRQ: u32 = 61;
+pub const HASH_IRQ: u32 = 96;

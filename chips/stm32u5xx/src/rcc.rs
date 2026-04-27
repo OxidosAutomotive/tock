@@ -78,4 +78,9 @@ impl Rcc {
         let val = self.registers.ccipr1.get();
         self.registers.ccipr1.set(val & !3);
     }
+
+    pub fn enable_hash(&self) {
+        let val = self.registers.ahb2enr1.get();
+        self.registers.ahb2enr1.set(val | (1 << 17));
+    }
 }
