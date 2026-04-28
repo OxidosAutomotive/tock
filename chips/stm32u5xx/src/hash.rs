@@ -1,4 +1,5 @@
 use core::cell::Cell;
+use core::ops::Index;
 
 use kernel::hil::digest::{
     Client, Digest, DigestData, DigestHash, DigestVerify, HmacSha256, HmacSha384, HmacSha512,
@@ -8,12 +9,10 @@ use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::leasable_buffer::SubSliceMutImmut;
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::utilities::registers::{
-    self, register_bitfields, register_structs, ReadOnly, ReadWrite, WriteOnly,
+    register_bitfields, register_structs, ReadOnly, ReadWrite, WriteOnly,
 };
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
-
-use crate::dma::Dma;
 
 register_structs! {
     /// Hash processor
@@ -218,7 +217,7 @@ DIN [
 STR [
     /// Digest calculation
     DCAL OFFSET(8) NUMBITS(1) [],
-    /// Number of valid bits in the last word of               the message
+    /// Number of valid bits in the last word of the message
     NBLW OFFSET(0) NUMBITS(5) []
 ],
 HRA0 [
@@ -274,9 +273,9 @@ HR7 [
     H7 OFFSET(0) NUMBITS(32) []
 ],
 IMR [
-    /// Digest calculation completion interrupt               enable
+    /// Digest calculation completion interrupt enable
     DCIE OFFSET(1) NUMBITS(1) [],
-    /// Data input interrupt               enable
+    /// Data input interrupt enable
     DINIE OFFSET(0) NUMBITS(1) []
 ],
 SR [
@@ -284,9 +283,9 @@ SR [
     BUSY OFFSET(3) NUMBITS(1) [],
     /// DMA Status
     DMAS OFFSET(2) NUMBITS(1) [],
-    /// Digest calculation completion interrupt               status
+    /// Digest calculation completion interrupt status
     DCIS OFFSET(1) NUMBITS(1) [],
-    /// Data input interrupt               status
+    /// Data input interrupt status
     DINIS OFFSET(0) NUMBITS(1) [],
     /// Number of words expected
     NBWE OFFSET(16) NUMBITS(5) [],
@@ -516,16 +515,17 @@ const HASH_BASE: StaticRef<HashRegisters> =
     unsafe { StaticRef::new(0x420C0400 as *const HashRegisters) };
 
 const HASH_BUFFER_LEN: usize = 132;
+const HASH_FIFO_SIZE: usize = 16;
 pub struct Hash<'a> {
     regs: StaticRef<HashRegisters>,
-    dma: OptionalCell<&'a Dma>,
-    dma_channel: Cell<usize>,
-    hmacKey: OptionalCell<&'a [u8]>,
-    // mode: Cell<Mode>,
+    // dma: OptionalCell<&'a Dma>,
+    // dma_channel: Cell<usize>,
+    hmac_key: OptionalCell<&'a [u8]>,
     data: Cell<Option<SubSliceMutImmut<'static, u8>>>,
     verify: Cell<bool>,
     client: OptionalCell<&'a dyn Client<32>>,
     digest: OptionalCell<&'static mut [u8; 32]>, // Maximum length that can be used
+    last_index: Cell<usize>,
     busy: Cell<bool>,
 }
 
@@ -533,13 +533,14 @@ impl Hash<'_> {
     pub fn new(base: StaticRef<HashRegisters>) -> Self {
         Self {
             regs: base,
-            dma: OptionalCell::empty(),
-            dma_channel: Cell::new(0),
+            // dma: OptionalCell::empty(),
+            // dma_channel: Cell::new(0),
             data: Cell::new(None),
-            hmacKey: OptionalCell::empty(),
+            hmac_key: OptionalCell::empty(),
             verify: Cell::new(false),
             digest: OptionalCell::empty(),
             client: OptionalCell::empty(),
+            last_index: Cell::new(0),
             busy: Cell::new(false),
         }
     }
@@ -547,7 +548,7 @@ impl Hash<'_> {
     pub fn handle_interupts(&self) {
         // Digest Calculation completed?
         if self.regs.sr.read(SR::DCIS) != 0 {
-            // disable the interrupt
+            // clear interrupt
             self.regs.sr.modify(SR::DCIS::CLEAR);
             // copy all the data to the digest
             if let Some(digest_buffer) = self.digest.take() {
@@ -581,11 +582,67 @@ impl Hash<'_> {
         }
         // New data can be written
         if self.regs.sr.read(SR::DINIS) != 0 {
-            // disable the interrupt
+            // clear interrupt
             self.regs.sr.modify(SR::DINIS::CLEAR);
+            if self.last_index < self.data.ok_or()
             // notify the client that new data can be written.
-            self.client.map(|client| client.add_data_done(result, data))
+            self.client.map(|client| client.add_data_done(result, data));
         }
+    }
+
+        fn process(&self, data: &dyn Index<usize, Output = u8>, count: usize) -> usize {
+        let regs = self.regs;
+        for i in 0..(count / 4) {
+            if self.last_index > HASH_FIFO_SIZE - 1 {
+                return i * 4;
+            }
+
+            let data_idx = i * 4;
+
+            let mut d = (data[data_idx + 3] as u32) << 0;
+            d |= (data[data_idx + 2] as u32) << 8;
+            d |= (data[data_idx + 1] as u32) << 16;
+            d |= (data[data_idx + 0] as u32) << 24;
+
+            regs.msg_fifo.set(d);
+        }
+
+        if !count.is_multiple_of(4) {
+            for i in 0..(count % 4) {
+                let data_idx = (count - (count % 4)) + i;
+                regs.msg_fifo_8.set(data[data_idx]);
+            }
+        }
+        count
+    }
+
+// Return true if processing more data, false if the buffer
+    // is completely processed.
+    fn data_progress(&self) -> bool {
+        self.data.take().is_some_and(|buf| match buf {
+            SubSliceMutImmut::Immutable(mut b) => {
+                if b.len() == 0 {
+                    self.data.set(Some(SubSliceMutImmut::Immutable(b)));
+                    false
+                } else {
+                    let count = self.process(&b, b.len());
+                    b.slice(count..);
+                    self.data.set(Some(SubSliceMutImmut::Immutable(b)));
+                    true
+                }
+            }
+            SubSliceMutImmut::Mutable(mut b) => {
+                if b.len() == 0 {
+                    self.data.set(Some(SubSliceMutImmut::Mutable(b)));
+                    false
+                } else {
+                    let count = self.process(&b, b.len());
+                    b.slice(count..);
+                    self.data.set(Some(SubSliceMutImmut::Mutable(b)));
+                    true
+                }
+            }
+        })
     }
 }
 
@@ -598,7 +655,17 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
         &'a self,
         digest: &'static mut [u8; 32],
     ) -> Result<(), (kernel::ErrorCode, &'static mut [u8; 32])> {
-        self.regs.
+        if self.busy.get() {
+            return Err((ErrorCode::BUSY, digest));
+        }
+        let regs = self.regs;
+        // start the final digest computation
+        regs.str.modify(STR::DCAL::SET);
+        self.busy.set(true);
+        self.digest.set(digest);
+
+        Ok(())
+    
     }
 }
 
@@ -621,6 +688,8 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             Err((ErrorCode::BUSY, data))
         } else {
             self.busy.set(true);
+            self.data.set(Some(data));
+
         }
     }
 
@@ -651,7 +720,7 @@ impl<'a> DigestVerify<'a, 32> for Hash<'a> {
         &'a self,
         compare: &'static mut [u8; 32],
     ) -> Result<(), (kernel::ErrorCode, &'static mut [u8; 32])> {
-        todo!()
+        self.run(compare)
     }
 }
 
@@ -692,7 +761,7 @@ impl HmacSha256 for Hash<'_> {
         } else {
             self.regs.cr.modify(CR::LKEY::CLEAR);
         }
-        self.hmacKey.set(key);
+        self.hmac_key.set(key);
         // self.regs.cr.modify(CR::INIT::SET);
         Ok(())
     }
