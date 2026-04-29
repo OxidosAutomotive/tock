@@ -48,6 +48,7 @@ struct NucleoU545RE {
             stm32u545::tim::Tim2<'static>,
         >,
     >,
+    hash: &'static capsules_extra::sha::ShaDriver<'static, stm32u545::hash::Hash, 32>,
 }
 
 impl SyscallDriverLookup for NucleoU545RE {
@@ -60,6 +61,7 @@ impl SyscallDriverLookup for NucleoU545RE {
             capsules_core::led::DRIVER_NUM => f(Some(self.led)),
             capsules_core::button::DRIVER_NUM => f(Some(self.button)),
             capsules_core::alarm::DRIVER_NUM => f(Some(self.alarm)),
+            capsules_extra::sha::DRIVER_NUM => f(Some(self.hash)),
             _ => f(None),
         }
     }
@@ -137,6 +139,7 @@ unsafe fn start() -> (
     let exti = stm32u545::exti::init();
     let dma1 = stm32u545::dma::init();
     let usart1 = stm32u545::usart::init();
+    let hash = stm32u545::hash::init();
 
     // Link DMA to USART1
     usart1.set_dma(dma1, 0, 1);
@@ -144,7 +147,7 @@ unsafe fn start() -> (
     // Load Peripherals Bundle
     let periphs = static_init!(
         stm32u545::Stm32u5xxPeripherals<'static>,
-        stm32u545::Stm32u5xxPeripherals::new(exti, dma1, usart1)
+        stm32u545::Stm32u5xxPeripherals::new(exti, dma1, usart1, hash)
     );
 
     // Power and Wires
@@ -152,6 +155,7 @@ unsafe fn start() -> (
     periphs.rcc.enable_gpioa();
     periphs.rcc.enable_gpioc();
     periphs.rcc.enable_usart1();
+    periphs.rcc.enable_hash();
     periphs.rcc.enable_syscfg();
     periphs.rcc.set_usart1_source_pclk();
     periphs.tim2.start();
@@ -247,6 +251,7 @@ unsafe fn start() -> (
             led,
             button,
             alarm,
+            hash
         }
     );
 
@@ -256,7 +261,8 @@ unsafe fn start() -> (
         stm32u545::chip::Stm32u5xxDefaultPeripherals::new(
             &periphs.tim2,
             periphs.usart1,
-            periphs.exti
+            periphs.exti,
+            periphs.hash
         )
     );
 

@@ -514,8 +514,9 @@ CSR53 [
 const HASH_BASE: StaticRef<HashRegisters> =
     unsafe { StaticRef::new(0x420C0400 as *const HashRegisters) };
 
-const HASH_BUFFER_LEN: usize = 132;
-const HASH_FIFO_SIZE: usize = 16;
+// In terms of 8-bit words
+const HASH_FIFO_SIZE: usize = 64;
+
 pub struct Hash<'a> {
     regs: StaticRef<HashRegisters>,
     // dma: OptionalCell<&'a Dma>,
@@ -523,9 +524,9 @@ pub struct Hash<'a> {
     hmac_key: OptionalCell<&'a [u8]>,
     data: Cell<Option<SubSliceMutImmut<'static, u8>>>,
     verify: Cell<bool>,
+    last_index: Cell<usize>,
     client: OptionalCell<&'a dyn Client<32>>,
     digest: OptionalCell<&'static mut [u8; 32]>, // Maximum length that can be used
-    last_index: Cell<usize>,
     busy: Cell<bool>,
 }
 
@@ -546,77 +547,115 @@ impl Hash<'_> {
     }
 
     pub fn handle_interupts(&self) {
+        let regs = self.regs;
+
         // Digest Calculation completed?
-        if self.regs.sr.read(SR::DCIS) != 0 {
-            // clear interrupt
-            self.regs.sr.modify(SR::DCIS::CLEAR);
-            // copy all the data to the digest
-            if let Some(digest_buffer) = self.digest.take() {
-                let regs = [
-                    self.regs.hr0.get(),
-                    self.regs.hr1.get(),
-                    self.regs.hr2.get(),
-                    self.regs.hr3.get(),
-                    self.regs.hr4.get(),
-                    self.regs.hr5.get(),
-                    self.regs.hr6.get(),
-                    self.regs.hr7.get(),
+        if regs.sr.read(SR::DCIS) != 0 {
+            self.client.map(|client| {
+                let digest = self.digest.take().unwrap();
+
+                let d = [
+                    regs.hr0.get(),
+                    regs.hr1.get(),
+                    regs.hr2.get(),
+                    regs.hr3.get(),
+                    regs.hr4.get(),
+                    regs.hr5.get(),
+                    regs.hr6.get(),
+                    regs.hr7.get(),
                 ];
+                // We need to compare the result with the digest received before.
+                if self.verify.get() {
+                    let mut equal = true;
 
-                for (i, word) in regs.iter().enumerate() {
-                    let bytes = word.to_be_bytes();
-                    let start = i * 4;
-                    // A general condition for digests with different lengths
-                    if start + 4 <= digest_buffer.len() {
-                        digest_buffer[start..start + 4].copy_from_slice(&bytes);
+                    for (i, word) in d.iter().enumerate() {
+                        let bytes = word.to_ne_bytes();
+                        let idx = 4 * i;
+
+                        if digest[idx + 0] != bytes[0]
+                            || digest[idx + 1] != bytes[1]
+                            || digest[idx + 2] != bytes[2]
+                            || digest[idx + 3] != bytes[3]
+                        {
+                            equal = false;
+                        }
                     }
-                }
-                // release hash peripheral
-                self.busy.set(false);
 
-                // notify the client that digest has been calculated
-                self.client.map(|client| {
-                    client.hash_done(Ok(()), digest_buffer);
-                });
-            }
-        }
-        // New data can be written
-        if self.regs.sr.read(SR::DINIS) != 0 {
+                    // self.clear_data();
+                    // NOTE(frihetselsker): I am not sure that this clears the whole internal FIFO, but we will see.
+                    regs.cr.modify(CR::INIT::SET);
+                    self.busy.set(false);
+                    client.verification_done(Ok(equal), digest);
+                } else {
+                    for (i, word) in d.iter().enumerate() {
+                        let bytes = word.to_ne_bytes();
+                        let idx = 4 * i;
+
+                        digest[idx + 0] = bytes[0];
+                        digest[idx + 1] = bytes[1];
+                        digest[idx + 2] = bytes[2];
+                        digest[idx + 3] = bytes[3];
+                    }
+
+                    // self.clear_data();
+                    regs.cr.modify(CR::INIT::SET);
+                    self.last_index.set(0);
+                    self.busy.set(false);
+                    client.hash_done(Ok(()), digest);
+                }
+            });
+            // New data can be written.
+        } else if regs.sr.read(SR::DINIS) != 0 {
             // clear interrupt
-            self.regs.sr.modify(SR::DINIS::CLEAR);
-            if self.last_index < self.data.ok_or()
-            // notify the client that new data can be written.
-            self.client.map(|client| client.add_data_done(result, data));
+            regs.sr.modify(SR::DINIS::CLEAR);
+
+            // if false, we are done
+            if !self.data_progress() {
+                self.client.map(|client| {
+                    self.busy.set(false);
+                    self.data.take().map(|buf| match buf {
+                        SubSliceMutImmut::Immutable(b) => client.add_data_done(Ok(()), b),
+                        SubSliceMutImmut::Mutable(b) => client.add_mut_data_done(Ok(()), b),
+                    })
+                });
+                regs.imr.modify(IMR::DINIE::CLEAR);
+            } else {
+                regs.imr.modify(IMR::DINIE::SET);
+            }
         }
     }
 
-        fn process(&self, data: &dyn Index<usize, Output = u8>, count: usize) -> usize {
+    fn process(&self, data: &dyn Index<usize, Output = u8>, count: usize) -> usize {
         let regs = self.regs;
         for i in 0..(count / 4) {
-            if self.last_index > HASH_FIFO_SIZE - 1 {
+            self.last_index.update(|index| index + 4);
+            if self.last_index.get() > HASH_FIFO_SIZE {
                 return i * 4;
             }
 
             let data_idx = i * 4;
+            // Swap is automatically made on Hash peripheral.
+            let mut d = (data[data_idx + 0] as u32) << 0;
+            d |= (data[data_idx + 1] as u32) << 8;
+            d |= (data[data_idx + 2] as u32) << 16;
+            d |= (data[data_idx + 3] as u32) << 24;
 
-            let mut d = (data[data_idx + 3] as u32) << 0;
-            d |= (data[data_idx + 2] as u32) << 8;
-            d |= (data[data_idx + 1] as u32) << 16;
-            d |= (data[data_idx + 0] as u32) << 24;
-
-            regs.msg_fifo.set(d);
+            regs.din.set(d);
         }
 
         if !count.is_multiple_of(4) {
+            let mut d = 0u32;
             for i in 0..(count % 4) {
                 let data_idx = (count - (count % 4)) + i;
-                regs.msg_fifo_8.set(data[data_idx]);
+                d |= (data[data_idx] as u32) << (8 * i);
             }
+            regs.din.set(d);
         }
+
         count
     }
 
-// Return true if processing more data, false if the buffer
+    // Return true if processing more data, false if the buffer
     // is completely processed.
     fn data_progress(&self) -> bool {
         self.data.take().is_some_and(|buf| match buf {
@@ -659,13 +698,17 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
             return Err((ErrorCode::BUSY, digest));
         }
         let regs = self.regs;
-        // start the final digest computation
+        // set the padding
+        regs.str
+            .modify(STR::NBLW.val((4 - (self.last_index.get() as u32 % 4)) * 8));
+        // start the final digest calculation
         regs.str.modify(STR::DCAL::SET);
+        // enable the interrupt
+        regs.imr.modify(IMR::DCIE::SET);
         self.busy.set(true);
         self.digest.set(digest);
 
         Ok(())
-    
     }
 }
 
@@ -688,8 +731,15 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             Err((ErrorCode::BUSY, data))
         } else {
             self.busy.set(true);
-            self.data.set(Some(data));
+            self.data.set(Some(SubSliceMutImmut::Immutable(data)));
 
+            let ret = self.data_progress();
+
+            if ret {
+                self.regs.imr.modify(IMR::DINIE::SET);
+            }
+
+            Ok(())
         }
     }
 
@@ -703,7 +753,20 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             kernel::utilities::leasable_buffer::SubSliceMut<'static, u8>,
         ),
     > {
-        todo!()
+        if self.busy.get() {
+            Err((ErrorCode::BUSY, data))
+        } else {
+            self.busy.set(true);
+            self.data.set(Some(SubSliceMutImmut::Mutable(data)));
+
+            let ret = self.data_progress();
+
+            if ret {
+                self.regs.imr.modify(IMR::DINIE::SET);
+            }
+
+            Ok(())
+        }
     }
 
     fn clear_data(&self) {
@@ -789,4 +852,8 @@ impl HmacSha512 for Hash<'_> {
     fn set_mode_hmacsha512(&self, key: &[u8]) -> Result<(), kernel::ErrorCode> {
         Err(kernel::ErrorCode::NOSUPPORT)
     }
+}
+
+pub unsafe fn init() -> &'static Hash<'static> {
+    kernel::static_init!(Hash, Hash::new(HASH_BASE))
 }

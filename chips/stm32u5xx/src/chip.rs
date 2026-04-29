@@ -3,6 +3,7 @@
 // Copyright Tock Contributors 2024.
 // Copyright OxidOS Automotive 2026.
 
+use crate::nvic::HASH_IRQ;
 use crate::nvic::{EXTI13_IRQ, GPDMA1_CH0_IRQ, GPDMA1_CH1_IRQ, TIM2_IRQ, USART1_IRQ};
 use core::fmt::Write;
 use kernel::platform::chip::Chip;
@@ -19,6 +20,7 @@ pub struct Stm32u5xxDefaultPeripherals<'a> {
     pub tim2: &'a crate::tim::Tim2<'a>,
     pub usart1: &'a crate::usart::Usart<'a>,
     pub exti: &'a crate::exti::Exti<'a>,
+    pub hash: &'a crate::hash::Hash<'a>,
 }
 
 impl<'a> Stm32u5xxDefaultPeripherals<'a> {
@@ -26,8 +28,14 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
         tim2: &'a crate::tim::Tim2<'a>,
         usart1: &'a crate::usart::Usart<'a>,
         exti: &'a crate::exti::Exti<'a>,
+        hash: &'a crate::hash::Hash<'a>,
     ) -> Self {
-        Self { tim2, usart1, exti }
+        Self {
+            tim2,
+            usart1,
+            exti,
+            hash,
+        }
     }
 }
 
@@ -57,6 +65,10 @@ impl InterruptService for Stm32u5xxDefaultPeripherals<'_> {
             GPDMA1_CH1_IRQ => {
                 // GPDMA1 Channel 1 (USART1 RX Complete)
                 self.usart1.handle_dma_interrupt(false);
+                true
+            }
+            HASH_IRQ => {
+                self.hash.handle_interupts();
                 true
             }
             _ => false,
