@@ -9,5 +9,6 @@ pub mod crc;
 pub mod hmac_sha256;
 pub mod kv_system;
 pub mod sha256;
+pub mod sha256_hw;
 pub mod siphash24;
 pub mod udp;
