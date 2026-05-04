@@ -3,6 +3,7 @@
 // Copyright OxidOS Automotive 2026.
 
 #![no_std]
+// #![recursion_limit = "256"]
 
 pub mod chip;
 pub mod dma;

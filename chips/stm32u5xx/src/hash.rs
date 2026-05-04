@@ -24,145 +24,20 @@ register_structs! {
         /// start register
         (0x008 => str: ReadWrite<u32, STR::Register>),
         /// HASH aliased digest register 0
-        (0x00C => hra0: ReadOnly<u32>),
-        /// HASH aliased digest register 1
-        (0x010 => hra1: ReadOnly<u32>),
-        /// HASH aliased digest register 2
-        (0x014 => hra2: ReadOnly<u32>),
-        /// HASH aliased digest register 3
-        (0x018 => hra3: ReadOnly<u32>),
-        /// HASH aliased digest register 4
-        (0x01C => hra4: ReadOnly<u32>),
+        /// 0x00C - 0x01C
+        (0x00C => hra: [ReadOnly<u32>; 5]),
         /// interrupt enable register
         (0x020 => imr: ReadWrite<u32, IMR::Register>),
         /// status register
         (0x024 => sr: ReadWrite<u32, SR::Register>),
         (0x028 => _reserved0),
         /// context swap registers
-        (0x0F8 => csr0: ReadWrite<u32>),
-        /// context swap registers
-        (0x0FC => csr1: ReadWrite<u32>),
-        /// context swap registers
-        (0x100 => csr2: ReadWrite<u32>),
-        /// context swap registers
-        (0x104 => csr3: ReadWrite<u32>),
-        /// context swap registers
-        (0x108 => csr4: ReadWrite<u32>),
-        /// context swap registers
-        (0x10C => csr5: ReadWrite<u32>),
-        /// context swap registers
-        (0x110 => csr6: ReadWrite<u32>),
-        /// context swap registers
-        (0x114 => csr7: ReadWrite<u32>),
-        /// context swap registers
-        (0x118 => csr8: ReadWrite<u32>),
-        /// context swap registers
-        (0x11C => csr9: ReadWrite<u32>),
-        /// context swap registers
-        (0x120 => csr10: ReadWrite<u32>),
-        /// context swap registers
-        (0x124 => csr11: ReadWrite<u32>),
-        /// context swap registers
-        (0x128 => csr12: ReadWrite<u32>),
-        /// context swap registers
-        (0x12C => csr13: ReadWrite<u32>),
-        /// context swap registers
-        (0x130 => csr14: ReadWrite<u32>),
-        /// context swap registers
-        (0x134 => csr15: ReadWrite<u32>),
-        /// context swap registers
-        (0x138 => csr16: ReadWrite<u32>),
-        /// context swap registers
-        (0x13C => csr17: ReadWrite<u32>),
-        /// context swap registers
-        (0x140 => csr18: ReadWrite<u32>),
-        /// context swap registers
-        (0x144 => csr19: ReadWrite<u32>),
-        /// context swap registers
-        (0x148 => csr20: ReadWrite<u32>),
-        /// context swap registers
-        (0x14C => csr21: ReadWrite<u32>),
-        /// context swap registers
-        (0x150 => csr22: ReadWrite<u32>),
-        /// context swap registers
-        (0x154 => csr23: ReadWrite<u32>),
-        /// context swap registers
-        (0x158 => csr24: ReadWrite<u32>),
-        /// context swap registers
-        (0x15C => csr25: ReadWrite<u32>),
-        /// context swap registers
-        (0x160 => csr26: ReadWrite<u32>),
-        /// context swap registers
-        (0x164 => csr27: ReadWrite<u32>),
-        /// context swap registers
-        (0x168 => csr28: ReadWrite<u32>),
-        /// context swap registers
-        (0x16C => csr29: ReadWrite<u32>),
-        /// context swap registers
-        (0x170 => csr30: ReadWrite<u32>),
-        /// context swap registers
-        (0x174 => csr31: ReadWrite<u32>),
-        /// context swap registers
-        (0x178 => csr32: ReadWrite<u32>),
-        /// context swap registers
-        (0x17C => csr33: ReadWrite<u32>),
-        /// context swap registers
-        (0x180 => csr34: ReadWrite<u32>),
-        /// context swap registers
-        (0x184 => csr35: ReadWrite<u32>),
-        /// context swap registers
-        (0x188 => csr36: ReadWrite<u32>),
-        /// context swap registers
-        (0x18C => csr37: ReadWrite<u32>),
-        /// context swap registers
-        (0x190 => csr38: ReadWrite<u32>),
-        /// context swap registers
-        (0x194 => csr39: ReadWrite<u32>),
-        /// context swap registers
-        (0x198 => csr40: ReadWrite<u32>),
-        /// context swap registers
-        (0x19C => csr41: ReadWrite<u32>),
-        /// context swap registers
-        (0x1A0 => csr42: ReadWrite<u32>),
-        /// context swap registers
-        (0x1A4 => csr43: ReadWrite<u32>),
-        /// context swap registers
-        (0x1A8 => csr44: ReadWrite<u32>),
-        /// context swap registers
-        (0x1AC => csr45: ReadWrite<u32>),
-        /// context swap registers
-        (0x1B0 => csr46: ReadWrite<u32>),
-        /// context swap registers
-        (0x1B4 => csr47: ReadWrite<u32>),
-        /// context swap registers
-        (0x1B8 => csr48: ReadWrite<u32>),
-        /// context swap registers
-        (0x1BC => csr49: ReadWrite<u32>),
-        /// context swap registers
-        (0x1C0 => csr50: ReadWrite<u32>),
-        /// context swap registers
-        (0x1C4 => csr51: ReadWrite<u32>),
-        /// context swap registers
-        (0x1C8 => csr52: ReadWrite<u32>),
-        /// context swap registers
-        (0x1CC => csr53: ReadWrite<u32>),
+        /// 0x0F8 - 0x1CC
+        (0x0F8 => csr: [ReadWrite<u32>; 54]),
         (0x1D0 => _reserved1),
         /// digest register 0
-        (0x310 => hr0: ReadOnly<u32>),
-        /// digest register 1
-        (0x314 => hr1: ReadOnly<u32>),
-        /// digest register 4
-        (0x318 => hr2: ReadOnly<u32>),
-        /// digest register 3
-        (0x31C => hr3: ReadOnly<u32>),
-        /// digest register 4
-        (0x320 => hr4: ReadOnly<u32>),
-        /// supplementary digest register 5
-        (0x324 => hr5: ReadOnly<u32>),
-        /// supplementary digest register 6
-        (0x328 => hr6: ReadOnly<u32>),
-        /// supplementary digest register 7
-        (0x32C => hr7: ReadOnly<u32>),
+        /// 0x310 - 0x32C
+        (0x310 => hr: [ReadOnly<u32>; 8]),
         (0x330 => @END),
     }
 }
@@ -220,57 +95,13 @@ STR [
     /// Number of valid bits in the last word of the message
     NBLW OFFSET(0) NUMBITS(5) []
 ],
-HRA0 [
+HRA [
     /// H0
-    H0 OFFSET(0) NUMBITS(32) []
+    H OFFSET(0) NUMBITS(32) []
 ],
-HRA1 [
-    /// H1
-    H1 OFFSET(0) NUMBITS(32) []
-],
-HRA2 [
-    /// H2
-    H2 OFFSET(0) NUMBITS(32) []
-],
-HRA3 [
-    /// H3
-    H3 OFFSET(0) NUMBITS(32) []
-],
-HRA4 [
-    /// H4
-    H4 OFFSET(0) NUMBITS(32) []
-],
-HR0 [
+HR [
     /// H0
-    H0 OFFSET(0) NUMBITS(32) []
-],
-HR1 [
-    /// H1
-    H1 OFFSET(0) NUMBITS(32) []
-],
-HR2 [
-    /// H2
-    H2 OFFSET(0) NUMBITS(32) []
-],
-HR3 [
-    /// H3
-    H3 OFFSET(0) NUMBITS(32) []
-],
-HR4 [
-    /// H4
-    H4 OFFSET(0) NUMBITS(32) []
-],
-HR5 [
-    /// H5
-    H5 OFFSET(0) NUMBITS(32) []
-],
-HR6 [
-    /// H6
-    H6 OFFSET(0) NUMBITS(32) []
-],
-HR7 [
-    /// H7
-    H7 OFFSET(0) NUMBITS(32) []
+    H OFFSET(0) NUMBITS(32) []
 ],
 IMR [
     /// Digest calculation completion interrupt enable
@@ -294,221 +125,9 @@ SR [
     /// Number of words already pushed
     NBWP OFFSET(9) NUMBITS(5) []
 ],
-CSR0 [
+CSR [
     /// CS0
-    CS0 OFFSET(0) NUMBITS(32) []
-],
-CSR1 [
-    /// CS1
-    CS1 OFFSET(0) NUMBITS(32) []
-],
-CSR2 [
-    /// CS2
-    CS2 OFFSET(0) NUMBITS(32) []
-],
-CSR3 [
-    /// CS3
-    CS3 OFFSET(0) NUMBITS(32) []
-],
-CSR4 [
-    /// CS4
-    CS4 OFFSET(0) NUMBITS(32) []
-],
-CSR5 [
-    /// CS5
-    CS5 OFFSET(0) NUMBITS(32) []
-],
-CSR6 [
-    /// CS6
-    CS6 OFFSET(0) NUMBITS(32) []
-],
-CSR7 [
-    /// CS7
-    CS7 OFFSET(0) NUMBITS(32) []
-],
-CSR8 [
-    /// CS8
-    CS8 OFFSET(0) NUMBITS(32) []
-],
-CSR9 [
-    /// CS9
-    CS9 OFFSET(0) NUMBITS(32) []
-],
-CSR10 [
-    /// CS10
-    CS10 OFFSET(0) NUMBITS(32) []
-],
-CSR11 [
-    /// CS11
-    CS11 OFFSET(0) NUMBITS(32) []
-],
-CSR12 [
-    /// CS12
-    CS12 OFFSET(0) NUMBITS(32) []
-],
-CSR13 [
-    /// CS13
-    CS13 OFFSET(0) NUMBITS(32) []
-],
-CSR14 [
-    /// CS14
-    CS14 OFFSET(0) NUMBITS(32) []
-],
-CSR15 [
-    /// CS15
-    CS15 OFFSET(0) NUMBITS(32) []
-],
-CSR16 [
-    /// CS16
-    CS16 OFFSET(0) NUMBITS(32) []
-],
-CSR17 [
-    /// CS17
-    CS17 OFFSET(0) NUMBITS(32) []
-],
-CSR18 [
-    /// CS18
-    CS18 OFFSET(0) NUMBITS(32) []
-],
-CSR19 [
-    /// CS19
-    CS19 OFFSET(0) NUMBITS(32) []
-],
-CSR20 [
-    /// CS20
-    CS20 OFFSET(0) NUMBITS(32) []
-],
-CSR21 [
-    /// CS21
-    CS21 OFFSET(0) NUMBITS(32) []
-],
-CSR22 [
-    /// CS22
-    CS22 OFFSET(0) NUMBITS(32) []
-],
-CSR23 [
-    /// CS23
-    CS23 OFFSET(0) NUMBITS(32) []
-],
-CSR24 [
-    /// CS24
-    CS24 OFFSET(0) NUMBITS(32) []
-],
-CSR25 [
-    /// CS25
-    CS25 OFFSET(0) NUMBITS(32) []
-],
-CSR26 [
-    /// CS26
-    CS26 OFFSET(0) NUMBITS(32) []
-],
-CSR27 [
-    /// CS27
-    CS27 OFFSET(0) NUMBITS(32) []
-],
-CSR28 [
-    /// CS28
-    CS28 OFFSET(0) NUMBITS(32) []
-],
-CSR29 [
-    /// CS29
-    CS29 OFFSET(0) NUMBITS(32) []
-],
-CSR30 [
-    /// CS30
-    CS30 OFFSET(0) NUMBITS(32) []
-],
-CSR31 [
-    /// CS31
-    CS31 OFFSET(0) NUMBITS(32) []
-],
-CSR32 [
-    /// CS32
-    CS32 OFFSET(0) NUMBITS(32) []
-],
-CSR33 [
-    /// CS33
-    CS33 OFFSET(0) NUMBITS(32) []
-],
-CSR34 [
-    /// CS34
-    CS34 OFFSET(0) NUMBITS(32) []
-],
-CSR35 [
-    /// CS35
-    CS35 OFFSET(0) NUMBITS(32) []
-],
-CSR36 [
-    /// CS36
-    CS36 OFFSET(0) NUMBITS(32) []
-],
-CSR37 [
-    /// CS37
-    CS37 OFFSET(0) NUMBITS(32) []
-],
-CSR38 [
-    /// CS38
-    CS38 OFFSET(0) NUMBITS(32) []
-],
-CSR39 [
-    /// CS39
-    CS39 OFFSET(0) NUMBITS(32) []
-],
-CSR40 [
-    /// CS40
-    CS40 OFFSET(0) NUMBITS(32) []
-],
-CSR41 [
-    /// CS41
-    CS41 OFFSET(0) NUMBITS(32) []
-],
-CSR42 [
-    /// CS42
-    CS42 OFFSET(0) NUMBITS(32) []
-],
-CSR43 [
-    /// CS43
-    CS43 OFFSET(0) NUMBITS(32) []
-],
-CSR44 [
-    /// CS44
-    CS44 OFFSET(0) NUMBITS(32) []
-],
-CSR45 [
-    /// CS45
-    CS45 OFFSET(0) NUMBITS(32) []
-],
-CSR46 [
-    /// CS46
-    CS46 OFFSET(0) NUMBITS(32) []
-],
-CSR47 [
-    /// CS47
-    CS47 OFFSET(0) NUMBITS(32) []
-],
-CSR48 [
-    /// CS48
-    CS48 OFFSET(0) NUMBITS(32) []
-],
-CSR49 [
-    /// CS49
-    CS49 OFFSET(0) NUMBITS(32) []
-],
-CSR50 [
-    /// CS50
-    CS50 OFFSET(0) NUMBITS(32) []
-],
-CSR51 [
-    /// CS51
-    CS51 OFFSET(0) NUMBITS(32) []
-],
-CSR52 [
-    /// CS52
-    CS52 OFFSET(0) NUMBITS(32) []
-],
-CSR53 [
-    /// CS53
-    CS53 OFFSET(0) NUMBITS(32) []
+    CS OFFSET(0) NUMBITS(32) []
 ]
 ];
 const HASH_BASE: StaticRef<HashRegisters> =
@@ -553,29 +172,19 @@ impl Hash<'_> {
         if regs.sr.read(SR::DCIS) != 0 {
             self.client.map(|client| {
                 let digest = self.digest.take().unwrap();
-
-                let d = [
-                    regs.hr0.get(),
-                    regs.hr1.get(),
-                    regs.hr2.get(),
-                    regs.hr3.get(),
-                    regs.hr4.get(),
-                    regs.hr5.get(),
-                    regs.hr6.get(),
-                    regs.hr7.get(),
-                ];
                 // We need to compare the result with the digest received before.
                 if self.verify.get() {
                     let mut equal = true;
 
-                    for (i, word) in d.iter().enumerate() {
-                        let bytes = word.to_ne_bytes();
-                        let idx = 4 * i;
+                    for i in 0..8 {
+                        let d = regs.hr[i].get().to_ne_bytes();
 
-                        if digest[idx + 0] != bytes[0]
-                            || digest[idx + 1] != bytes[1]
-                            || digest[idx + 2] != bytes[2]
-                            || digest[idx + 3] != bytes[3]
+                        let idx = i * 4;
+
+                        if digest[idx + 0] != d[0]
+                            || digest[idx + 1] != d[1]
+                            || digest[idx + 2] != d[2]
+                            || digest[idx + 3] != d[3]
                         {
                             equal = false;
                         }
@@ -587,14 +196,15 @@ impl Hash<'_> {
                     self.busy.set(false);
                     client.verification_done(Ok(equal), digest);
                 } else {
-                    for (i, word) in d.iter().enumerate() {
-                        let bytes = word.to_ne_bytes();
-                        let idx = 4 * i;
+                    for i in 0..8 {
+                        let d = regs.hr[i].get().to_ne_bytes();
 
-                        digest[idx + 0] = bytes[0];
-                        digest[idx + 1] = bytes[1];
-                        digest[idx + 2] = bytes[2];
-                        digest[idx + 3] = bytes[3];
+                        let idx = i * 4;
+
+                        digest[idx + 0] = d[0];
+                        digest[idx + 1] = d[1];
+                        digest[idx + 2] = d[2];
+                        digest[idx + 3] = d[3];
                     }
 
                     // self.clear_data();
@@ -824,7 +434,7 @@ impl HmacSha256 for Hash<'_> {
         } else {
             self.regs.cr.modify(CR::LKEY::CLEAR);
         }
-        self.hmac_key.set(key);
+        // self.hmac_key.set(key);
         // self.regs.cr.modify(CR::INIT::SET);
         Ok(())
     }

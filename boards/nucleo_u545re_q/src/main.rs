@@ -15,6 +15,7 @@ use kernel::utilities::single_thread_value::SingleThreadValue;
 use kernel::{create_capability, static_init};
 
 use stm32u545::gpio::PinId;
+use stm32u545::hash::Hash;
 
 pub mod io;
 
@@ -49,7 +50,10 @@ struct NucleoU545RE {
             stm32u545::tim::Tim2<'static>,
         >,
     >,
-    hash: &'static capsules_extra::test::sha256_hw::TestSha256<stm32u545::hash::Hash<'static>>,
+    hash: &'static capsules_extra::test::sha256_hw::TestSha256<
+        'static,
+        stm32u545::hash::Hash<'static>,
+    >,
 }
 
 impl SyscallDriverLookup for NucleoU545RE {
@@ -240,15 +244,20 @@ unsafe fn start() -> (
     )
     .finalize(components::button_component_static!(stm32u545::gpio::Pin));
 
-    let test_hash = TestSha256::new(
-        hash,
-        "abc".as_bytes(),
+    let hash_data_buffer = static_init!([u8; 3], [b'a', b'b', b'c']);
+
+    let hash_digest_buffer = static_init!(
+        [u8; 32],
         [
             0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
             0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
             0xf2, 0x00, 0x15, 0xad,
-        ],
-        true,
+        ]
+    );
+
+    let test_hash = static_init!(
+        TestSha256<'static, Hash<'static>>,
+        TestSha256::new(hash, hash_data_buffer, hash_digest_buffer, true)
     );
 
     // Platform and Interrupts
@@ -262,7 +271,7 @@ unsafe fn start() -> (
             led,
             button,
             alarm,
-            hash
+            hash: test_hash
         }
     );
 
@@ -306,6 +315,8 @@ pub unsafe fn main() {
     let main_loop_capability = create_capability!(capabilities::MainLoopCapability);
 
     let (board_kernel, platform, chip) = start();
+
+    platform.hash.run();
 
     // Hand over control to the Tock Kernel Loop
     board_kernel.kernel_loop::<NucleoU545RE, ChipHw, { NUM_PROCS as u8 }>(
