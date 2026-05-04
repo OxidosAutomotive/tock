@@ -6,6 +6,7 @@
 #![no_std]
 #![no_main]
 
+use capsules_extra::test::sha256_hw::TestSha256;
 use kernel::capabilities;
 use kernel::component::Component;
 use kernel::debug::PanicResources;
@@ -48,7 +49,7 @@ struct NucleoU545RE {
             stm32u545::tim::Tim2<'static>,
         >,
     >,
-    hash: &'static capsules_extra::sha::ShaDriver<'static, stm32u545::hash::Hash, 32>,
+    hash: &'static capsules_extra::test::sha256_hw::TestSha256<stm32u545::hash::Hash<'static>>,
 }
 
 impl SyscallDriverLookup for NucleoU545RE {
@@ -61,7 +62,6 @@ impl SyscallDriverLookup for NucleoU545RE {
             capsules_core::led::DRIVER_NUM => f(Some(self.led)),
             capsules_core::button::DRIVER_NUM => f(Some(self.button)),
             capsules_core::alarm::DRIVER_NUM => f(Some(self.alarm)),
-            capsules_extra::sha::DRIVER_NUM => f(Some(self.hash)),
             _ => f(None),
         }
     }
@@ -239,6 +239,17 @@ unsafe fn start() -> (
         ),
     )
     .finalize(components::button_component_static!(stm32u545::gpio::Pin));
+
+    let test_hash = TestSha256::new(
+        hash,
+        "abc".as_bytes(),
+        [
+            0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+            0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+            0xf2, 0x00, 0x15, 0xad,
+        ],
+        true,
+    );
 
     // Platform and Interrupts
     let platform = static_init!(
