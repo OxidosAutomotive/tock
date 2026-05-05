@@ -163,7 +163,6 @@ impl Hash<'_> {
             _hmac_key: OptionalCell::empty(),
             verify: Cell::new(false),
             // Set the default mode
-            data_type: Cell::new(DataType::_8BitData),
             digest: OptionalCell::empty(),
             client: OptionalCell::empty(),
             last_index: Cell::new(0),
@@ -179,7 +178,7 @@ impl Hash<'_> {
         if regs.sr.read(SR::DCIS) != 0 {
             self.client.map(|client| {
                 let digest = self.digest.take().unwrap();
-                debug!("SHA: Entered interrupt related to digest calculation");
+                //debug!("SHA: Entered interrupt related to digest calculation");
                 // We need to compare the result with the digest received before.
                 if self.verify.get() {
                     let mut equal = true;
@@ -252,9 +251,13 @@ impl Hash<'_> {
 
     fn process(&self, data: &dyn Index<usize, Output = u8>, count: usize) -> usize {
         let regs = self.regs;
+        debug!("SHA: Entered processing");
+        debug!("SHA: Adding 32-bit words");
         for i in 0..(count / 4) {
             self.last_index.update(|index| index + 4);
+            debug!("SHA: current last_index: {}", count);
             if self.last_index.get() > HASH_FIFO_SIZE {
+                debug!("SHA: 'buffer is full', process says");
                 return i * 4;
             }
 
@@ -265,15 +268,23 @@ impl Hash<'_> {
             d |= (data[data_idx + 2] as u32) << 16;
             d |= (data[data_idx + 3] as u32) << 24;
 
+            debug!("SHA: 32-bit word written {:02x}", d);
+
             regs.din.set(d);
         }
 
         if !count.is_multiple_of(4) {
+            debug!("SHA: Adding 8-bit words as leftovers");
             let mut d = 0u32;
             for i in 0..(count % 4) {
                 let data_idx = (count - (count % 4)) + i;
                 d |= (data[data_idx] as u32) << (8 * i);
             }
+            self.last_index.update(|index| index + (count % 4));
+            debug!(
+                "SHA: Index after all the operations = {}",
+                self.last_index.get()
+            );
             regs.din.set(d);
         }
 
@@ -292,6 +303,7 @@ impl Hash<'_> {
                     let count = self.process(&b, b.len());
                     b.slice(count..);
                     if b.len() == 0 {
+                        debug!("SHA: Adding 32-bit words");
                         // Finish
                         self.data.set(Some(SubSliceMutImmut::Immutable(b)));
                         self.deferred_call.set();
@@ -339,13 +351,13 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
         // set the padding
         // assume that we write bytes, not bit by bit
         debug!(
-            "SHA: Set the padding: {}",
+            "SHA: bits filled: {}",
             ((self.last_index.get() as u32 % 4) * 8)
         );
         regs.str
             .modify(STR::NBLW.val((self.last_index.get() as u32 % 4) * 8));
         // enable the interrupt
-        debug!("SHA: Enable the interrupt for digest finish");
+        //debug!("SHA: Enable the interrupt for digest finish");
         regs.imr.modify(IMR::DCIE::SET);
         // start the final digest calculation
         debug!("SHA: Start computation");
@@ -453,7 +465,7 @@ impl Sha224 for Hash<'_> {
         }
         self.regs
             .cr
-            .modify(CR::ALGO::SHA2_224 +Digest CR::MODE::CLEAR + CR::DATATYPE::_8bitData + CR::INIT::SET);
+            .modify(CR::ALGO::SHA2_224 + CR::MODE::CLEAR + CR::DATATYPE::_8bitData + CR::INIT::SET);
         Ok(())
     }
 }

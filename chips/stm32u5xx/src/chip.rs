@@ -6,7 +6,6 @@
 use crate::nvic::HASH_IRQ;
 use crate::nvic::{EXTI13_IRQ, GPDMA1_CH0_IRQ, GPDMA1_CH1_IRQ, TIM2_IRQ, USART1_IRQ};
 use core::fmt::Write;
-use kernel::debug;
 use kernel::platform::chip::Chip;
 use kernel::platform::chip::InterruptService;
 
