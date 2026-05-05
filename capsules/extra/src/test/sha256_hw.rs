@@ -30,7 +30,7 @@ pub struct TestSha256<'a, H: digest::Digest<'a, 32>> {
 // We add data in chunks of 12 bytes to ensure that the underlying
 // buffering mechanism works correctly (it can handle filling blocks
 // as well as zeroing out incomplete blocks).
-const CHUNK_SIZE: usize = 12;
+const CHUNK_SIZE: usize = 16;
 
 impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> TestSha256<'a, H> {
     pub fn new(
@@ -50,13 +50,17 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> TestSha256<'a, H> {
     }
 
     pub fn run(&'static self) {
+        let _ = self.sha.set_mode_sha256();
+        debug!("Test_SHA: Set the mode");
         self.sha.set_client(self);
+        debug!("Test_SHA: Set the client");
         let data = self.data.take().unwrap();
         let chunk_size = cmp::min(CHUNK_SIZE, data.len());
         self.position.set(chunk_size);
         let mut buffer = SubSliceMut::new(data);
         buffer.slice(0..chunk_size);
         let r = self.sha.add_mut_data(buffer);
+        debug!("Test_SHA: Sent data to the buffer");
         if r.is_err() {
             panic!("Sha256Test: failed to add data: {:?}", r);
         }
@@ -69,6 +73,7 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> digest::ClientData<32> for 
     }
 
     fn add_mut_data_done(&self, result: Result<(), ErrorCode>, mut data: SubSliceMut<'static, u8>) {
+        debug!("Test_SHA: callback called");
         if data.len() != 0 {
             let r = self.sha.add_mut_data(data);
             if r.is_err() {
@@ -76,6 +81,7 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> digest::ClientData<32> for 
             }
         } else {
             data.reset();
+            debug!("Test_SHA: new data should be sent");
             if self.position.get() < data.len() {
                 let new_position = cmp::min(data.len(), self.position.get() + CHUNK_SIZE);
                 data.slice(self.position.get()..new_position);
@@ -90,6 +96,7 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> digest::ClientData<32> for 
                 }
                 self.position.set(new_position);
             } else {
+                debug!("Test_SHA: no data should be sent");
                 data.reset();
                 self.data.put(Some(data.take()));
                 match result {
@@ -97,6 +104,8 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> digest::ClientData<32> for 
                         let v = self.sha.verify(self.hash.take().unwrap());
                         if v.is_err() {
                             panic!("Sha256Test: failed to verify: {:?}", v);
+                        } else {
+                            debug!("Test_SHA: Started verification");
                         }
                     }
                     Err(e) => {

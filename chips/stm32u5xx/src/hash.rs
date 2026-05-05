@@ -14,6 +14,8 @@ use kernel::utilities::registers::{
 use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 
+use kernel::debug;
+
 register_structs! {
     /// Hash processor
     HashRegisters {
@@ -140,7 +142,7 @@ pub struct Hash<'a> {
     regs: StaticRef<HashRegisters>,
     // dma: OptionalCell<&'a Dma>,
     // dma_channel: Cell<usize>,
-    hmac_key: OptionalCell<&'a [u8]>,
+    _hmac_key: OptionalCell<&'a [u8]>,
     data: Cell<Option<SubSliceMutImmut<'static, u8>>>,
     verify: Cell<bool>,
     last_index: Cell<usize>,
@@ -156,7 +158,7 @@ impl Hash<'_> {
             // dma: OptionalCell::empty(),
             // dma_channel: Cell::new(0),
             data: Cell::new(None),
-            hmac_key: OptionalCell::empty(),
+            _hmac_key: OptionalCell::empty(),
             verify: Cell::new(false),
             digest: OptionalCell::empty(),
             client: OptionalCell::empty(),
@@ -276,8 +278,13 @@ impl Hash<'_> {
                 } else {
                     let count = self.process(&b, b.len());
                     b.slice(count..);
-                    self.data.set(Some(SubSliceMutImmut::Immutable(b)));
-                    true
+                    if b.len() == 0 {
+                        self.data.set(Some(SubSliceMutImmut::Immutable(b)));
+                        false
+                    } else {
+                        self.data.set(Some(SubSliceMutImmut::Immutable(b)));
+                        true
+                    }
                 }
             }
             SubSliceMutImmut::Mutable(mut b) => {
@@ -287,8 +294,13 @@ impl Hash<'_> {
                 } else {
                     let count = self.process(&b, b.len());
                     b.slice(count..);
-                    self.data.set(Some(SubSliceMutImmut::Mutable(b)));
-                    true
+                    if b.len() == 0 {
+                        self.data.set(Some(SubSliceMutImmut::Mutable(b)));
+                        false
+                    } else {
+                        self.data.set(Some(SubSliceMutImmut::Mutable(b)));
+                        true
+                    }
                 }
             }
         })
@@ -309,8 +321,9 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
         }
         let regs = self.regs;
         // set the padding
+        // assume that we write bytes, not bit by bit
         regs.str
-            .modify(STR::NBLW.val((4 - (self.last_index.get() as u32 % 4)) * 8));
+            .modify(STR::NBLW.val((self.last_index.get() as u32 % 4) * 8));
         // start the final digest calculation
         regs.str.modify(STR::DCAL::SET);
         // enable the interrupt
@@ -347,6 +360,16 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
 
             if ret {
                 self.regs.imr.modify(IMR::DINIE::SET);
+            } else {
+                self.client.map(|client| {
+                    self.busy.set(false);
+                    self.data.take().map(|buf| match buf {
+                        SubSliceMutImmut::Immutable(b) => client.add_data_done(Ok(()), b),
+                        SubSliceMutImmut::Mutable(b) => {
+                            client.add_mut_data_done(Err(ErrorCode::FAIL), b)
+                        }
+                    })
+                });
             }
 
             Ok(())
@@ -366,13 +389,29 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
         if self.busy.get() {
             Err((ErrorCode::BUSY, data))
         } else {
+            debug!("SHA: Entered SHA");
             self.busy.set(true);
             self.data.set(Some(SubSliceMutImmut::Mutable(data)));
+            debug!("SHA: Set data");
 
             let ret = self.data_progress();
 
+            debug!("SHA: Data processed");
+
             if ret {
+                debug!("SHA: MOre data to add");
                 self.regs.imr.modify(IMR::DINIE::SET);
+            } else {
+                debug!("SHA: No more data to add");
+                self.client.map(|client| {
+                    self.busy.set(false);
+                    self.data.take().map(|buf| match buf {
+                        SubSliceMutImmut::Mutable(b) => client.add_mut_data_done(Ok(()), b),
+                        SubSliceMutImmut::Immutable(b) => {
+                            client.add_data_done(Err(ErrorCode::FAIL), b)
+                        }
+                    })
+                });
             }
 
             Ok(())
@@ -408,7 +447,9 @@ impl Sha224 for Hash<'_> {
         if self.busy.get() {
             return Err(kernel::ErrorCode::BUSY);
         }
-        self.regs.cr.modify(CR::ALGO::SHA2_224 + CR::MODE::CLEAR);
+        self.regs
+            .cr
+            .modify(CR::ALGO::SHA2_224 + CR::MODE::CLEAR + CR::INIT::SET);
         Ok(())
     }
 }
@@ -418,7 +459,9 @@ impl Sha256 for Hash<'_> {
         if self.busy.get() {
             return Err(kernel::ErrorCode::BUSY);
         }
-        self.regs.cr.modify(CR::ALGO::SHA2_256 + CR::MODE::CLEAR);
+        let regs = self.regs;
+        regs.cr
+            .modify(CR::ALGO::SHA2_256 + CR::MODE::CLEAR + CR::INIT::SET);
         Ok(())
     }
 }
