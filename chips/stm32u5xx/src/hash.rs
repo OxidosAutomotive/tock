@@ -1,9 +1,10 @@
 use core::cell::Cell;
 use core::ops::Index;
 
+use kernel::deferred_call::{DeferredCall, DeferredCallClient};
 use kernel::hil::digest::{
-    Client, Digest, DigestData, DigestHash, DigestVerify, HmacSha256, HmacSha384, HmacSha512,
-    Sha224, Sha256, Sha384, Sha512,
+    Bit16Data, Bit1Data, Bit32Data, Bit8Data, Client, Digest, DigestData, DigestHash, DigestVerify,
+    HmacSha256, HmacSha384, HmacSha512, Sha224, Sha256, Sha384, Sha512,
 };
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::leasable_buffer::SubSliceMutImmut;
@@ -148,6 +149,7 @@ pub struct Hash<'a> {
     last_index: Cell<usize>,
     client: OptionalCell<&'a dyn Client<32>>,
     digest: OptionalCell<&'static mut [u8; 32]>, // Maximum length that can be used
+    deferred_call: DeferredCall,
     busy: Cell<bool>,
 }
 
@@ -160,9 +162,12 @@ impl Hash<'_> {
             data: Cell::new(None),
             _hmac_key: OptionalCell::empty(),
             verify: Cell::new(false),
+            // Set the default mode
+            data_type: Cell::new(DataType::_8BitData),
             digest: OptionalCell::empty(),
             client: OptionalCell::empty(),
             last_index: Cell::new(0),
+            deferred_call: DeferredCall::new(),
             busy: Cell::new(false),
         }
     }
@@ -174,12 +179,18 @@ impl Hash<'_> {
         if regs.sr.read(SR::DCIS) != 0 {
             self.client.map(|client| {
                 let digest = self.digest.take().unwrap();
+                debug!("SHA: Entered interrupt related to digest calculation");
                 // We need to compare the result with the digest received before.
                 if self.verify.get() {
                     let mut equal = true;
 
                     for i in 0..8 {
                         let d = regs.hr[i].get().to_ne_bytes();
+
+                        debug!(
+                            "SHA: Check {} - Data: 0x{:02x}{:02x}{:02x}{:02x}",
+                            i, d[0], d[1], d[2], d[3]
+                        );
 
                         let idx = i * 4;
 
@@ -196,6 +207,7 @@ impl Hash<'_> {
                     // NOTE(frihetselsker): I am not sure that this clears the whole internal FIFO, but we will see.
                     regs.cr.modify(CR::INIT::SET);
                     self.busy.set(false);
+                    self.verify.set(false);
                     client.verification_done(Ok(equal), digest);
                 } else {
                     for i in 0..8 {
@@ -216,20 +228,21 @@ impl Hash<'_> {
                     client.hash_done(Ok(()), digest);
                 }
             });
-            // New data can be written.
+            // New data can be written (it we filled the FIFO buffer)
         } else if regs.sr.read(SR::DINIS) != 0 {
             // clear interrupt
             regs.sr.modify(SR::DINIS::CLEAR);
 
             // if false, we are done
             if !self.data_progress() {
-                self.client.map(|client| {
-                    self.busy.set(false);
-                    self.data.take().map(|buf| match buf {
-                        SubSliceMutImmut::Immutable(b) => client.add_data_done(Ok(()), b),
-                        SubSliceMutImmut::Mutable(b) => client.add_mut_data_done(Ok(()), b),
-                    })
-                });
+                // self.client.map(|client| {
+                //     self.busy.set(false);
+                //     self.data.take().map(|buf| match buf {
+                //         SubSliceMutImmut::Immutable(b) => client.add_data_done(Ok(()), b),
+                //         SubSliceMutImmut::Mutable(b) => client.add_mut_data_done(Ok(()), b),
+                //     })
+                // });
+                self.deferred_call.set();
                 regs.imr.modify(IMR::DINIE::CLEAR);
             } else {
                 regs.imr.modify(IMR::DINIE::SET);
@@ -279,7 +292,9 @@ impl Hash<'_> {
                     let count = self.process(&b, b.len());
                     b.slice(count..);
                     if b.len() == 0 {
+                        // Finish
                         self.data.set(Some(SubSliceMutImmut::Immutable(b)));
+                        self.deferred_call.set();
                         false
                     } else {
                         self.data.set(Some(SubSliceMutImmut::Immutable(b)));
@@ -296,6 +311,7 @@ impl Hash<'_> {
                     b.slice(count..);
                     if b.len() == 0 {
                         self.data.set(Some(SubSliceMutImmut::Mutable(b)));
+                        self.deferred_call.set();
                         false
                     } else {
                         self.data.set(Some(SubSliceMutImmut::Mutable(b)));
@@ -322,12 +338,18 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
         let regs = self.regs;
         // set the padding
         // assume that we write bytes, not bit by bit
+        debug!(
+            "SHA: Set the padding: {}",
+            ((self.last_index.get() as u32 % 4) * 8)
+        );
         regs.str
             .modify(STR::NBLW.val((self.last_index.get() as u32 % 4) * 8));
-        // start the final digest calculation
-        regs.str.modify(STR::DCAL::SET);
         // enable the interrupt
+        debug!("SHA: Enable the interrupt for digest finish");
         regs.imr.modify(IMR::DCIE::SET);
+        // start the final digest calculation
+        debug!("SHA: Start computation");
+        regs.str.modify(STR::DCAL::SET);
         self.busy.set(true);
         self.digest.set(digest);
 
@@ -360,16 +382,6 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
 
             if ret {
                 self.regs.imr.modify(IMR::DINIE::SET);
-            } else {
-                self.client.map(|client| {
-                    self.busy.set(false);
-                    self.data.take().map(|buf| match buf {
-                        SubSliceMutImmut::Immutable(b) => client.add_data_done(Ok(()), b),
-                        SubSliceMutImmut::Mutable(b) => {
-                            client.add_mut_data_done(Err(ErrorCode::FAIL), b)
-                        }
-                    })
-                });
             }
 
             Ok(())
@@ -389,7 +401,7 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
         if self.busy.get() {
             Err((ErrorCode::BUSY, data))
         } else {
-            debug!("SHA: Entered SHA");
+            debug!("SHA: Entered SHA data adder");
             self.busy.set(true);
             self.data.set(Some(SubSliceMutImmut::Mutable(data)));
             debug!("SHA: Set data");
@@ -399,19 +411,10 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             debug!("SHA: Data processed");
 
             if ret {
-                debug!("SHA: MOre data to add");
+                debug!("SHA: More data to add");
                 self.regs.imr.modify(IMR::DINIE::SET);
             } else {
                 debug!("SHA: No more data to add");
-                self.client.map(|client| {
-                    self.busy.set(false);
-                    self.data.take().map(|buf| match buf {
-                        SubSliceMutImmut::Mutable(b) => client.add_mut_data_done(Ok(()), b),
-                        SubSliceMutImmut::Immutable(b) => {
-                            client.add_data_done(Err(ErrorCode::FAIL), b)
-                        }
-                    })
-                });
             }
 
             Ok(())
@@ -432,6 +435,7 @@ impl<'a> DigestVerify<'a, 32> for Hash<'a> {
         &'a self,
         compare: &'static mut [u8; 32],
     ) -> Result<(), (kernel::ErrorCode, &'static mut [u8; 32])> {
+        self.verify.set(true);
         self.run(compare)
     }
 }
@@ -449,7 +453,7 @@ impl Sha224 for Hash<'_> {
         }
         self.regs
             .cr
-            .modify(CR::ALGO::SHA2_224 + CR::MODE::CLEAR + CR::INIT::SET);
+            .modify(CR::ALGO::SHA2_224 +Digest CR::MODE::CLEAR + CR::DATATYPE::_8bitData + CR::INIT::SET);
         Ok(())
     }
 }
@@ -461,7 +465,7 @@ impl Sha256 for Hash<'_> {
         }
         let regs = self.regs;
         regs.cr
-            .modify(CR::ALGO::SHA2_256 + CR::MODE::CLEAR + CR::INIT::SET);
+            .modify(CR::ALGO::SHA2_256 + CR::MODE::CLEAR + CR::DATATYPE::_8bitData + CR::INIT::SET);
         Ok(())
     }
 }
@@ -471,11 +475,13 @@ impl HmacSha256 for Hash<'_> {
         if self.busy.get() {
             return Err(kernel::ErrorCode::BUSY);
         }
-        self.regs.cr.modify(CR::ALGO::SHA2_256 + CR::MODE::SET);
+        self.regs
+            .cr
+            .modify(CR::ALGO::SHA2_256 + CR::DATATYPE::_8bitData + CR::MODE::SET);
         if key.len() > 64 {
-            self.regs.cr.modify(CR::LKEY::SET);
+            self.regs.cr.modify(CR::LKEY::SET + CR::INIT::SET);
         } else {
-            self.regs.cr.modify(CR::LKEY::CLEAR);
+            self.regs.cr.modify(CR::LKEY::CLEAR + CR::INIT::SET);
         }
         // self.hmac_key.set(key);
         // self.regs.cr.modify(CR::INIT::SET);
@@ -504,6 +510,53 @@ impl HmacSha384 for Hash<'_> {
 impl HmacSha512 for Hash<'_> {
     fn set_mode_hmacsha512(&self, key: &[u8]) -> Result<(), kernel::ErrorCode> {
         Err(kernel::ErrorCode::NOSUPPORT)
+    }
+}
+
+impl Bit32Data for Hash<'_> {
+    fn set_data_type_32_bit(&self) -> Result<(), ErrorCode> {
+        self.regs.cr.modify(CR::DATATYPE::_32bitData);
+        Ok(())
+    }
+}
+
+impl Bit16Data for Hash<'_> {
+    fn set_data_type_16_bit(&self) -> Result<(), ErrorCode> {
+        self.regs.cr.modify(CR::DATATYPE::_16bitData);
+        Ok(())
+    }
+}
+
+impl Bit8Data for Hash<'_> {
+    fn set_data_type_8_bit(&self) -> Result<(), ErrorCode> {
+        self.regs.cr.modify(CR::DATATYPE::_8bitData);
+        Ok(())
+    }
+}
+
+impl Bit1Data for Hash<'_> {
+    fn set_data_type_1_bit(&self) -> Result<(), ErrorCode> {
+        self.regs.cr.modify(CR::DATATYPE::_1bitData);
+        Ok(())
+    }
+}
+
+impl DeferredCallClient for Hash<'_> {
+    fn handle_deferred_call(&self) {
+        // we call deferred call only if we processed
+        // all the data in one cycle without using interrupts
+        debug!("SHA: entered deferred call handler");
+        self.busy.set(false);
+        self.client.map(|client| {
+            self.data.take().map(|buf| match buf {
+                SubSliceMutImmut::Immutable(b) => client.add_data_done(Ok(()), b),
+                SubSliceMutImmut::Mutable(b) => client.add_mut_data_done(Ok(()), b),
+            })
+        });
+    }
+
+    fn register(&'static self) {
+        self.deferred_call.register(self);
     }
 }
 

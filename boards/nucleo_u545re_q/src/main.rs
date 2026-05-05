@@ -10,6 +10,7 @@ use capsules_extra::test::sha256_hw::TestSha256;
 use kernel::capabilities;
 use kernel::component::Component;
 use kernel::debug::PanicResources;
+use kernel::deferred_call::DeferredCallClient;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::utilities::single_thread_value::SingleThreadValue;
 use kernel::{create_capability, static_init};
@@ -144,6 +145,8 @@ unsafe fn start() -> (
     let dma1 = stm32u545::dma::init();
     let usart1 = stm32u545::usart::init();
     let hash = stm32u545::hash::init();
+
+    hash.register();
 
     // Link DMA to USART1
     usart1.set_dma(dma1, 0, 1);

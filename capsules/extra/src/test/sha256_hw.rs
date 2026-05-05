@@ -32,7 +32,7 @@ pub struct TestSha256<'a, H: digest::Digest<'a, 32>> {
 // as well as zeroing out incomplete blocks).
 const CHUNK_SIZE: usize = 16;
 
-impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> TestSha256<'a, H> {
+impl<'a, H: digest::Digest<'a, 32> + digest::Sha256 + digest::Bit8Data> TestSha256<'a, H> {
     pub fn new(
         sha: &'a H,
         data: &'static mut [u8],
@@ -50,6 +50,9 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> TestSha256<'a, H> {
     }
 
     pub fn run(&'static self) {
+        // We need to choose the algo and data format
+        // TODO(frihetselsker): Handle errors in the capsules mroe gracefully
+        let _ = self.sha.set_data_type_8_bit();
         let _ = self.sha.set_mode_sha256();
         debug!("Test_SHA: Set the mode");
         self.sha.set_client(self);
@@ -81,7 +84,7 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> digest::ClientData<32> for 
             }
         } else {
             data.reset();
-            debug!("Test_SHA: new data should be sent");
+            debug!("Test_SHA: new data should be sent if we have more");
             if self.position.get() < data.len() {
                 let new_position = cmp::min(data.len(), self.position.get() + CHUNK_SIZE);
                 data.slice(self.position.get()..new_position);
@@ -96,16 +99,15 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> digest::ClientData<32> for 
                 }
                 self.position.set(new_position);
             } else {
-                debug!("Test_SHA: no data should be sent");
+                debug!("Test_SHA: we do not have more data");
                 data.reset();
                 self.data.put(Some(data.take()));
                 match result {
                     Ok(()) => {
+                        debug!("Test_SHA: start verification");
                         let v = self.sha.verify(self.hash.take().unwrap());
                         if v.is_err() {
                             panic!("Sha256Test: failed to verify: {:?}", v);
-                        } else {
-                            debug!("Test_SHA: Started verification");
                         }
                     }
                     Err(e) => {
@@ -145,7 +147,9 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> digest::ClientVerify<32>
 }
 
 impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> digest::ClientHash<32> for TestSha256<'a, H> {
-    fn hash_done(&self, _result: Result<(), ErrorCode>, _digest: &'static mut [u8; 32]) {}
+    fn hash_done(&self, _result: Result<(), ErrorCode>, _digest: &'static mut [u8; 32]) {
+        debug!("Test_SHA: hash_done is not used for now");
+    }
 }
 
 impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> CapsuleTest for TestSha256<'a, H> {
