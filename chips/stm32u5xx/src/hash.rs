@@ -137,7 +137,13 @@ const HASH_BASE: StaticRef<HashRegisters> =
     unsafe { StaticRef::new(0x420C0400 as *const HashRegisters) };
 
 // In terms of 8-bit words
-const HASH_FIFO_SIZE: usize = 64;
+const HASH_FIFO_SIZE: usize = 68;
+const DIGEST_BLOCK_SIZE: usize = 64;
+
+// TODO(frihetselsker): What if we add data byte by byte? We need to store the last 32 bit word as well.
+// I don't know how it is handled by the buffer
+//
+// Also, to save more space, I can use registers
 
 pub struct Hash<'a> {
     regs: StaticRef<HashRegisters>,
@@ -146,7 +152,8 @@ pub struct Hash<'a> {
     _hmac_key: OptionalCell<&'a [u8]>,
     data: Cell<Option<SubSliceMutImmut<'static, u8>>>,
     verify: Cell<bool>,
-    last_index: Cell<usize>,
+    leftover_buffer: Cell<[u8; 4]>,
+    leftover_index: Cell<usize>,
     client: OptionalCell<&'a dyn Client<32>>,
     digest: OptionalCell<&'static mut [u8; 32]>, // Maximum length that can be used
     deferred_call: DeferredCall,
@@ -162,10 +169,10 @@ impl Hash<'_> {
             data: Cell::new(None),
             _hmac_key: OptionalCell::empty(),
             verify: Cell::new(false),
-            // Set the default mode
+            leftover_buffer: Cell::new([0u8; 4]),
+            leftover_index: Cell::new(0),
             digest: OptionalCell::empty(),
             client: OptionalCell::empty(),
-            last_index: Cell::new(0),
             deferred_call: DeferredCall::new(),
             busy: Cell::new(false),
         }
@@ -184,7 +191,7 @@ impl Hash<'_> {
                     let mut equal = true;
 
                     for i in 0..8 {
-                        let d = regs.hr[i].get().to_ne_bytes();
+                        let d = regs.hr[i].get().to_be_bytes();
 
                         debug!(
                             "SHA: Check {} - Data: 0x{:02x}{:02x}{:02x}{:02x}",
@@ -210,7 +217,7 @@ impl Hash<'_> {
                     client.verification_done(Ok(equal), digest);
                 } else {
                     for i in 0..8 {
-                        let d = regs.hr[i].get().to_ne_bytes();
+                        let d = regs.hr[i].get().to_be_bytes();
 
                         let idx = i * 4;
 
@@ -222,13 +229,13 @@ impl Hash<'_> {
 
                     // self.clear_data();
                     regs.cr.modify(CR::INIT::SET);
-                    self.last_index.set(0);
                     self.busy.set(false);
                     client.hash_done(Ok(()), digest);
                 }
             });
-            // New data can be written (it we filled the FIFO buffer)
+            // New data can be written (if we filled the FIFO buffer)
         } else if regs.sr.read(SR::DINIS) != 0 {
+            debug!("SHA: The whole buffer has been processed, we can add more!");
             // clear interrupt
             regs.sr.modify(SR::DINIS::CLEAR);
 
@@ -251,41 +258,68 @@ impl Hash<'_> {
 
     fn process(&self, data: &dyn Index<usize, Output = u8>, count: usize) -> usize {
         let regs = self.regs;
-        debug!("SHA: Entered processing");
-        debug!("SHA: Adding 32-bit words");
-        for i in 0..(count / 4) {
-            self.last_index.update(|index| index + 4);
-            debug!("SHA: current last_index: {}", count);
-            if self.last_index.get() > HASH_FIFO_SIZE {
+        debug!("SHA: current last_index: {}", regs.sr.read(SR::NBWP));
+        let words_num = count / 4;
+        for i in 0..words_num {
+            if regs.sr.read(SR::NBWE) == 0 {
                 debug!("SHA: 'buffer is full', process says");
                 return i * 4;
             }
 
             let data_idx = i * 4;
             // Swap is automatically made on Hash peripheral.
-            let mut d = (data[data_idx + 0] as u32) << 0;
-            d |= (data[data_idx + 1] as u32) << 8;
-            d |= (data[data_idx + 2] as u32) << 16;
-            d |= (data[data_idx + 3] as u32) << 24;
+            // let mut d = (data[data_idx + 0] as u32) << 0;
+            // d |= (data[data_idx + 1] as u32) << 8;
+            // d |= (data[data_idx + 2] as u32) << 16;
+            // d |= (data[data_idx + 3] as u32) << 24;
 
-            debug!("SHA: 32-bit word written {:02x}", d);
+            let d = u32::from_le_bytes([
+                data[data_idx + 0],
+                data[data_idx + 1],
+                data[data_idx + 2],
+                data[data_idx + 3],
+            ]);
+            debug!("SHA: big word: 0x{:02x}", d);
+
+            //debug!("SHA: 32-bit word written {:02x}", d);
+            //
 
             regs.din.set(d);
+
+            debug!(
+                "SHA: last_index after insertions: {}",
+                regs.sr.read(SR::NBWP)
+            );
+            debug!("SHA: words left to add: {}", regs.sr.read(SR::NBWE));
         }
 
         if !count.is_multiple_of(4) {
             debug!("SHA: Adding 8-bit words as leftovers");
-            let mut d = 0u32;
+
+            // THIS SHOULD BE UPDATED
             for i in 0..(count % 4) {
+                if regs.sr.read(SR::NBWE) == 0 {
+                    debug!("SHA: 'buffer is full', process says");
+                    return i + words_num;
+                }
                 let data_idx = (count - (count % 4)) + i;
-                d |= (data[data_idx] as u32) << (8 * i);
+                // d |= (data[data_idx] as u32) << (8 * i);
+                self.leftover_buffer.update(|buf| {
+                    buf[self.leftover_index.get()] = data[data_idx];
+                    self.leftover_index.update(|index| index + 1);
+                    buf
+                });
             }
-            self.last_index.update(|index| index + (count % 4));
+            let word = u32::from_le_bytes(self.leftover_buffer.get());
             debug!(
-                "SHA: Index after all the operations = {}",
-                self.last_index.get()
+                "SHA: leftovers 0x{:02x}",
+                u32::from_le_bytes(self.leftover_buffer.get())
             );
-            regs.din.set(d);
+            if self.leftover_index.get() == 4 {
+                regs.din.set(word);
+                self.leftover_index.set(0);
+                self.leftover_buffer.take();
+            }
         }
 
         count
@@ -303,10 +337,8 @@ impl Hash<'_> {
                     let count = self.process(&b, b.len());
                     b.slice(count..);
                     if b.len() == 0 {
-                        debug!("SHA: Adding 32-bit words");
                         // Finish
                         self.data.set(Some(SubSliceMutImmut::Immutable(b)));
-                        self.deferred_call.set();
                         false
                     } else {
                         self.data.set(Some(SubSliceMutImmut::Immutable(b)));
@@ -323,7 +355,6 @@ impl Hash<'_> {
                     b.slice(count..);
                     if b.len() == 0 {
                         self.data.set(Some(SubSliceMutImmut::Mutable(b)));
-                        self.deferred_call.set();
                         false
                     } else {
                         self.data.set(Some(SubSliceMutImmut::Mutable(b)));
@@ -350,12 +381,9 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
         let regs = self.regs;
         // set the padding
         // assume that we write bytes, not bit by bit
-        debug!(
-            "SHA: bits filled: {}",
-            ((self.last_index.get() as u32 % 4) * 8)
-        );
+        debug!("SHA: bits filled: {}", self.leftover_index.get() * 8);
         regs.str
-            .modify(STR::NBLW.val((self.last_index.get() as u32 % 4) * 8));
+            .modify(STR::NBLW.val(self.leftover_index.get() as u32 * 8));
         // enable the interrupt
         //debug!("SHA: Enable the interrupt for digest finish");
         regs.imr.modify(IMR::DCIE::SET);
@@ -394,6 +422,8 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
 
             if ret {
                 self.regs.imr.modify(IMR::DINIE::SET);
+            } else {
+                self.deferred_call.set();
             }
 
             Ok(())
@@ -414,6 +444,9 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             Err((ErrorCode::BUSY, data))
         } else {
             debug!("SHA: Entered SHA data adder");
+            if data.len() > HASH_FIFO_SIZE {
+                self.regs.imr.modify(IMR::DINIE::SET);
+            }
             self.busy.set(true);
             self.data.set(Some(SubSliceMutImmut::Mutable(data)));
             debug!("SHA: Set data");
@@ -424,9 +457,9 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
 
             if ret {
                 debug!("SHA: More data to add");
-                self.regs.imr.modify(IMR::DINIE::SET);
             } else {
                 debug!("SHA: No more data to add");
+                self.deferred_call.set();
             }
 
             Ok(())
