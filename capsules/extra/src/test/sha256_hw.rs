@@ -30,7 +30,7 @@ pub struct TestSha256<'a, H: digest::Digest<'a, 32>> {
 // We add data in chunks of 12 bytes to ensure that the underlying
 // buffering mechanism works correctly (it can handle filling blocks
 // as well as zeroing out incomplete blocks).
-const CHUNK_SIZE: usize = 5;
+const CHUNK_SIZE: usize = 32;
 
 impl<'a, H: digest::Digest<'a, 32> + digest::Sha256 + digest::Bit8Data> TestSha256<'a, H> {
     pub fn new(

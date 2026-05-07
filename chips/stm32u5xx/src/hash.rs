@@ -137,13 +137,10 @@ const HASH_BASE: StaticRef<HashRegisters> =
     unsafe { StaticRef::new(0x420C0400 as *const HashRegisters) };
 
 // In terms of 8-bit words
-const HASH_FIFO_SIZE: usize = 68;
-const DIGEST_BLOCK_SIZE: usize = 64;
+// const HASH_FIFO_SIZE: usize = 68;
+// const DIGEST_BLOCK_SIZE: usize = 64;
 
-// TODO(frihetselsker): What if we add data byte by byte? We need to store the last 32 bit word as well.
-// I don't know how it is handled by the buffer
-//
-// Also, to save more space, I can use registers
+// TODO(frihetselsker): Explore registers for checking the FIFO size
 
 pub struct Hash<'a> {
     regs: StaticRef<HashRegisters>,
@@ -180,6 +177,9 @@ impl Hash<'_> {
 
     pub fn handle_interupts(&self) {
         let regs = self.regs;
+
+        // Disable all the registers
+        // regs.imr.modify(IMR::DCIE::CLEAR +);
 
         // Digest Calculation completed?
         if regs.sr.read(SR::DCIS) != 0 {
@@ -239,6 +239,13 @@ impl Hash<'_> {
             // clear interrupt
             regs.sr.modify(SR::DINIS::CLEAR);
 
+            // Small fix, I don;t like it, it should be optimized
+            // But we finished!
+            if regs.cr.read(CR::DINNE) == 0 {
+                regs.imr.modify(IMR::DINIE::CLEAR);
+                return;
+            }
+
             // if false, we are done
             if !self.data_progress() {
                 // self.client.map(|client| {
@@ -280,18 +287,18 @@ impl Hash<'_> {
                 data[data_idx + 2],
                 data[data_idx + 3],
             ]);
-            debug!("SHA: big word: 0x{:02x}", d);
+            // debug!("SHA: big word: 0x{:02x}", d);
 
             //debug!("SHA: 32-bit word written {:02x}", d);
             //
 
             regs.din.set(d);
 
-            debug!(
-                "SHA: last_index after insertions: {}",
-                regs.sr.read(SR::NBWP)
-            );
-            debug!("SHA: words left to add: {}", regs.sr.read(SR::NBWE));
+            // debug!(
+            //     "SHA: last_index after insertions: {}",
+            //     regs.sr.read(SR::NBWP)
+            // );
+            // debug!("SHA: words left to add: {}", regs.sr.read(SR::NBWE));
         }
 
         if !count.is_multiple_of(4) {
@@ -449,7 +456,7 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             Err((ErrorCode::BUSY, data))
         } else {
             debug!("SHA: Entered SHA data adder");
-            if data.len() > HASH_FIFO_SIZE {
+            if data.len() > self.regs.sr.read(SR::NBWE) as usize {
                 self.regs.imr.modify(IMR::DINIE::SET);
             }
             self.busy.set(true);
