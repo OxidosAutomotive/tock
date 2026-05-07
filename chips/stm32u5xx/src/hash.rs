@@ -152,7 +152,7 @@ pub struct Hash<'a> {
     _hmac_key: OptionalCell<&'a [u8]>,
     data: Cell<Option<SubSliceMutImmut<'static, u8>>>,
     verify: Cell<bool>,
-    leftover_buffer: Cell<[u8; 4]>,
+    leftover_buffer: Cell<u32>,
     leftover_index: Cell<usize>,
     client: OptionalCell<&'a dyn Client<32>>,
     digest: OptionalCell<&'static mut [u8; 32]>, // Maximum length that can be used
@@ -169,7 +169,7 @@ impl Hash<'_> {
             data: Cell::new(None),
             _hmac_key: OptionalCell::empty(),
             verify: Cell::new(false),
-            leftover_buffer: Cell::new([0u8; 4]),
+            leftover_buffer: Cell::new(0),
             leftover_index: Cell::new(0),
             digest: OptionalCell::empty(),
             client: OptionalCell::empty(),
@@ -248,6 +248,7 @@ impl Hash<'_> {
                 //         SubSliceMutImmut::Mutable(b) => client.add_mut_data_done(Ok(()), b),
                 //     })
                 // });
+                // Should we use call client here directly?
                 self.deferred_call.set();
                 regs.imr.modify(IMR::DINIE::CLEAR);
             } else {
@@ -296,7 +297,6 @@ impl Hash<'_> {
         if !count.is_multiple_of(4) {
             debug!("SHA: Adding 8-bit words as leftovers");
 
-            // THIS SHOULD BE UPDATED
             for i in 0..(count % 4) {
                 if regs.sr.read(SR::NBWE) == 0 {
                     debug!("SHA: 'buffer is full', process says");
@@ -304,21 +304,18 @@ impl Hash<'_> {
                 }
                 let data_idx = (count - (count % 4)) + i;
                 // d |= (data[data_idx] as u32) << (8 * i);
-                self.leftover_buffer.update(|buf| {
-                    buf[self.leftover_index.get()] = data[data_idx];
-                    self.leftover_index.update(|index| index + 1);
-                    buf
-                });
+                self.leftover_buffer
+                    .update(|buf| buf >> 8 | (data[data_idx] as u32).rotate_right(8));
+                debug!(
+                    "SHA: leftover right now: 0x{:02x}",
+                    self.leftover_buffer.get()
+                );
+                self.leftover_index.update(|index| (index + 1) % 4);
             }
-            let word = u32::from_le_bytes(self.leftover_buffer.get());
-            debug!(
-                "SHA: leftovers 0x{:02x}",
-                u32::from_le_bytes(self.leftover_buffer.get())
-            );
-            if self.leftover_index.get() == 4 {
-                regs.din.set(word);
-                self.leftover_index.set(0);
-                self.leftover_buffer.take();
+            debug!("SHA: leftovers 0x{:02x}", self.leftover_buffer.get());
+            if self.leftover_index.get() == 0 {
+                // It is safe because u32::default() = 0
+                regs.din.set(self.leftover_buffer.take());
             }
         }
 
@@ -381,9 +378,17 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
         let regs = self.regs;
         // set the padding
         // assume that we write bytes, not bit by bit
-        debug!("SHA: bits filled: {}", self.leftover_index.get() * 8);
-        regs.str
-            .modify(STR::NBLW.val(self.leftover_index.get() as u32 * 8));
+        if self.leftover_buffer.get() != 0 {
+            debug!("SHA: bits filled: {}", self.leftover_index.get() * 8);
+            debug!(
+                "SHA: leftover we need to write: 0x{:02x}",
+                self.leftover_buffer.get() >> (8 * (4 - self.leftover_index.get()))
+            );
+            regs.din
+                .set(self.leftover_buffer.take() >> (8 * (4 - self.leftover_index.get())));
+            regs.str
+                .modify(STR::NBLW.val(self.leftover_index.take() as u32 * 8));
+        }
         // enable the interrupt
         //debug!("SHA: Enable the interrupt for digest finish");
         regs.imr.modify(IMR::DCIE::SET);
@@ -459,6 +464,8 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
                 debug!("SHA: More data to add");
             } else {
                 debug!("SHA: No more data to add");
+                // Or do I need to call the client directly?
+                // Personally, I don't think so
                 self.deferred_call.set();
             }
 
