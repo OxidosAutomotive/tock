@@ -139,6 +139,9 @@ const HASH_BASE: StaticRef<HashRegisters> =
 // In terms of 8-bit words
 // const HASH_FIFO_SIZE: usize = 68;
 // const DIGEST_BLOCK_SIZE: usize = 64;
+// SHA2-256 has the largest digest.
+const MAX_DIGEST_LEN: usize = 32;
+const MAX_HMAC_KEY_SIZE: usize = 128;
 
 // TODO(frihetselsker): Explore registers for checking the FIFO size
 
@@ -146,13 +149,17 @@ pub struct Hash<'a> {
     regs: StaticRef<HashRegisters>,
     // dma: OptionalCell<&'a Dma>,
     // dma_channel: Cell<usize>,
-    _hmac_key: OptionalCell<&'a [u8]>,
+    hmac_key: OptionalCell<[u8; MAX_HMAC_KEY_SIZE]>,
     data: Cell<Option<SubSliceMutImmut<'static, u8>>>,
     verify: Cell<bool>,
+    key_loaded: Cell<bool>,
     leftover_buffer: Cell<u32>,
     leftover_index: Cell<usize>,
-    client: OptionalCell<&'a dyn Client<32>>,
-    digest: OptionalCell<&'static mut [u8; 32]>, // Maximum length that can be used
+    // How to be more flexible in this field?
+    client: OptionalCell<&'a dyn Client<MAX_DIGEST_LEN>>,
+    // This can be processed depending on the enum `Mode` which will be set by
+    // functions `set_..._mode...()`
+    digest: OptionalCell<&'static mut [u8; MAX_DIGEST_LEN]>, // Maximum length that can be used
     deferred_call: DeferredCall,
     busy: Cell<bool>,
 }
@@ -164,8 +171,9 @@ impl Hash<'_> {
             // dma: OptionalCell::empty(),
             // dma_channel: Cell::new(0),
             data: Cell::new(None),
-            _hmac_key: OptionalCell::empty(),
+            hmac_key: OptionalCell::empty(),
             verify: Cell::new(false),
+            key_loaded: Cell::new(false),
             leftover_buffer: Cell::new(0),
             leftover_index: Cell::new(0),
             digest: OptionalCell::empty(),
@@ -178,8 +186,8 @@ impl Hash<'_> {
     pub fn handle_interupts(&self) {
         let regs = self.regs;
 
-        // Disable all the registers
-        // regs.imr.modify(IMR::DCIE::CLEAR +);
+        // Disable all the interrupts
+        regs.imr.modify(IMR::DCIE::CLEAR + IMR::DINIE::CLEAR);
 
         // Digest Calculation completed?
         if regs.sr.read(SR::DCIS) != 0 {
@@ -237,14 +245,14 @@ impl Hash<'_> {
         } else if regs.sr.read(SR::DINIS) != 0 {
             debug!("SHA: The whole buffer has been processed, we can add more!");
             // clear interrupt
-            regs.sr.modify(SR::DINIS::CLEAR);
+            // regs.sr.modify(SR::DINIS::CLEAR);
 
             // Small fix, I don;t like it, it should be optimized
             // But we finished!
-            if regs.cr.read(CR::DINNE) == 0 {
-                regs.imr.modify(IMR::DINIE::CLEAR);
-                return;
-            }
+            // if regs.cr.read(CR::DINNE) == 0 {
+            //     regs.imr.modify(IMR::DINIE::CLEAR);
+            //     return;
+            // }
 
             // if false, we are done
             if !self.data_progress() {
@@ -256,8 +264,8 @@ impl Hash<'_> {
                 //     })
                 // });
                 // Should we use call client here directly?
+                // regs.imr.modify(IMR::DINIE::CLEAR);
                 self.deferred_call.set();
-                regs.imr.modify(IMR::DINIE::CLEAR);
             } else {
                 regs.imr.modify(IMR::DINIE::SET);
             }
@@ -368,6 +376,8 @@ impl Hash<'_> {
             }
         })
     }
+
+    fn load_key()
 }
 
 impl<'a> DigestHash<'a, 32> for Hash<'a> {
@@ -461,18 +471,18 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             }
             self.busy.set(true);
             self.data.set(Some(SubSliceMutImmut::Mutable(data)));
-            debug!("SHA: Set data");
 
             let ret = self.data_progress();
 
-            debug!("SHA: Data processed");
+            // debug!("SHA: Data processed");
 
             if ret {
                 debug!("SHA: More data to add");
             } else {
                 debug!("SHA: No more data to add");
                 // Or do I need to call the client directly?
-                // Personally, I don't think so
+                // Personally, I don't think so, we need to wait for another cycle,
+                // when kernel is able to process it
                 self.deferred_call.set();
             }
 
@@ -513,6 +523,7 @@ impl Sha224 for Hash<'_> {
         self.regs
             .cr
             .modify(CR::ALGO::SHA2_224 + CR::MODE::CLEAR + CR::DATATYPE::_8bitData + CR::INIT::SET);
+        self.hmac_key.clear();
         Ok(())
     }
 }
@@ -525,6 +536,7 @@ impl Sha256 for Hash<'_> {
         let regs = self.regs;
         regs.cr
             .modify(CR::ALGO::SHA2_256 + CR::MODE::CLEAR + CR::DATATYPE::_8bitData + CR::INIT::SET);
+        self.hmac_key.clear();
         Ok(())
     }
 }
@@ -534,16 +546,29 @@ impl HmacSha256 for Hash<'_> {
         if self.busy.get() {
             return Err(kernel::ErrorCode::BUSY);
         }
+        if key.len() > MAX_HMAC_KEY_SIZE {
+            return Err(kernel::ErrorCode::NOMEM);
+        }
         self.regs
             .cr
             .modify(CR::ALGO::SHA2_256 + CR::DATATYPE::_8bitData + CR::MODE::SET);
         if key.len() > 64 {
             self.regs.cr.modify(CR::LKEY::SET + CR::INIT::SET);
+            // set the interrupt
+            if key.len() > 68 {
+                self.regs.imr.modify(IMR::DINIE::SET);
+            }
         } else {
             self.regs.cr.modify(CR::LKEY::CLEAR + CR::INIT::SET);
         }
         // self.hmac_key.set(key);
+        // we need to store this key throughout the whole operation
+        // and then load it to data subslice and process it as usually
+        //
+        // The problem is how to store a reference with anonymous lifetime.
+        //
         // self.regs.cr.modify(CR::INIT::SET);
+        //
         Ok(())
     }
 }

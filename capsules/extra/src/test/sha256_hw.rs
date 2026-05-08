@@ -51,7 +51,7 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha256 + digest::Bit8Data> TestSha2
 
     pub fn run(&'static self) {
         // We need to choose the algo and data format
-        // TODO(frihetselsker): Handle errors in the capsules mroe gracefully
+        // TODO(frihetselsker): Handle errors in the capsules more gracefully
         let _ = self.sha.set_data_type_8_bit();
         let _ = self.sha.set_mode_sha256();
         debug!("Test_SHA: Set the mode");
