@@ -1601,7 +1601,6 @@ name = "stm32u545"
 version = "0.2.3-dev"
 dependencies = [
  "cortexm33",
- "enum_primitive",
  "kernel",
  "stm32u5xx",
 ]
@@ -1611,7 +1610,6 @@ name = "stm32u5xx"
 version = "0.2.3-dev"
 dependencies = [
  "cortexm33",
- "enum_primitive",
  "kernel",
 ]
 
