@@ -4,7 +4,7 @@ use core::ops::Index;
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
 use kernel::hil::digest::{
     Bit16Data, Bit1Data, Bit32Data, Bit8Data, Client, Digest, DigestData, DigestHash, DigestVerify,
-    HmacSha256, HmacSha384, HmacSha512, Sha224, Sha256, Sha384, Sha512,
+    HmacSha256, HmacSha384, HmacSha512, Md5, Sha1, Sha224, Sha256, Sha384, Sha512,
 };
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::leasable_buffer::SubSliceMutImmut;
@@ -16,6 +16,8 @@ use kernel::utilities::StaticRef;
 use kernel::ErrorCode;
 
 use kernel::debug;
+
+use crate::hash::CR::ALGO::{MD5, SHA_1};
 
 register_structs! {
     /// Hash processor
@@ -141,18 +143,37 @@ const HASH_BASE: StaticRef<HashRegisters> =
 // const DIGEST_BLOCK_SIZE: usize = 64;
 // SHA2-256 has the largest digest.
 const MAX_DIGEST_LEN: usize = 32;
+const HASH_FIFO_SIZE: usize = 17;
 const MAX_HMAC_KEY_SIZE: usize = 128;
 
-// TODO(frihetselsker): Explore registers for checking the FIFO size
+#[derive(Clone, Copy)]
+enum Mode {
+    MD5,
+    SHA1,
+    SHA2_224,
+    SHA2_256,
+}
+
+impl Mode {
+    fn get_digest_len(&self) -> usize {
+        match self {
+            Mode::MD5 => 4,
+            Mode::SHA1 => 5,
+            Mode::SHA2_224 => 7,
+            Mode::SHA2_256 => 8,
+        }
+    }
+}
 
 pub struct Hash<'a> {
     regs: StaticRef<HashRegisters>,
     // dma: OptionalCell<&'a Dma>,
     // dma_channel: Cell<usize>,
+    mode: Cell<Option<Mode>>,
     hmac_key: OptionalCell<[u8; MAX_HMAC_KEY_SIZE]>,
     data: Cell<Option<SubSliceMutImmut<'static, u8>>>,
     verify: Cell<bool>,
-    key_loaded: Cell<bool>,
+    // key_loaded: Cell<bool>,
     leftover_buffer: Cell<u32>,
     leftover_index: Cell<usize>,
     // How to be more flexible in this field?
@@ -170,10 +191,11 @@ impl Hash<'_> {
             regs: base,
             // dma: OptionalCell::empty(),
             // dma_channel: Cell::new(0),
+            mode: Cell::new(None),
             data: Cell::new(None),
             hmac_key: OptionalCell::empty(),
             verify: Cell::new(false),
-            key_loaded: Cell::new(false),
+            // key_loaded: Cell::new(false),
             leftover_buffer: Cell::new(0),
             leftover_index: Cell::new(0),
             digest: OptionalCell::empty(),
@@ -195,50 +217,58 @@ impl Hash<'_> {
                 let digest = self.digest.take().unwrap();
                 //debug!("SHA: Entered interrupt related to digest calculation");
                 // We need to compare the result with the digest received before.
-                if self.verify.get() {
-                    let mut equal = true;
-
-                    for i in 0..8 {
-                        let d = regs.hr[i].get().to_be_bytes();
-
-                        debug!(
-                            "SHA: Check {} - Data: 0x{:02x}{:02x}{:02x}{:02x}",
-                            i, d[0], d[1], d[2], d[3]
-                        );
-
-                        let idx = i * 4;
-
-                        if digest[idx + 0] != d[0]
-                            || digest[idx + 1] != d[1]
-                            || digest[idx + 2] != d[2]
-                            || digest[idx + 3] != d[3]
-                        {
-                            equal = false;
+                // If there is no operation, we react in no manner.
+                if let Some(mode) = self.mode.get() {
+                    if self.verify.get() {
+                        if self.mode.get().is_none() {
+                            client.verification_done(Err(ErrorCode::FAIL), digest);
+                            return;
                         }
+                        let mut equal = true;
+                        for i in 0..mode.get_digest_len() {
+                            let d = regs.hr[i].get().to_be_bytes();
+
+                            debug!(
+                                "SHA: Check {} - Data: 0x{:02x}{:02x}{:02x}{:02x}",
+                                i, d[0], d[1], d[2], d[3]
+                            );
+
+                            let idx = i * 4;
+
+                            if digest[idx + 0] != d[0]
+                                || digest[idx + 1] != d[1]
+                                || digest[idx + 2] != d[2]
+                                || digest[idx + 3] != d[3]
+                            {
+                                equal = false;
+                            }
+                        }
+
+                        // self.clear_data();
+                        // NOTE(frihetselsker): I am not sure that this clears the whole internal FIFO, but we will see.
+                        regs.cr.modify(CR::INIT::SET);
+                        self.busy.set(false);
+                        self.verify.set(false);
+                        client.verification_done(Ok(equal), digest);
+                    } else {
+                        for i in 0..mode.get_digest_len() {
+                            let d = regs.hr[i].get().to_be_bytes();
+
+                            let idx = i * 4;
+
+                            digest[idx + 0] = d[0];
+                            digest[idx + 1] = d[1];
+                            digest[idx + 2] = d[2];
+                            digest[idx + 3] = d[3];
+                        }
+                        // pad digest if needed
+                        digest[(mode.get_digest_len() * 4)..MAX_DIGEST_LEN].fill(0);
+
+                        // self.clear_data();
+                        regs.cr.modify(CR::INIT::SET);
+                        self.busy.set(false);
+                        client.hash_done(Ok(()), digest);
                     }
-
-                    // self.clear_data();
-                    // NOTE(frihetselsker): I am not sure that this clears the whole internal FIFO, but we will see.
-                    regs.cr.modify(CR::INIT::SET);
-                    self.busy.set(false);
-                    self.verify.set(false);
-                    client.verification_done(Ok(equal), digest);
-                } else {
-                    for i in 0..8 {
-                        let d = regs.hr[i].get().to_be_bytes();
-
-                        let idx = i * 4;
-
-                        digest[idx + 0] = d[0];
-                        digest[idx + 1] = d[1];
-                        digest[idx + 2] = d[2];
-                        digest[idx + 3] = d[3];
-                    }
-
-                    // self.clear_data();
-                    regs.cr.modify(CR::INIT::SET);
-                    self.busy.set(false);
-                    client.hash_done(Ok(()), digest);
                 }
             });
             // New data can be written (if we filled the FIFO buffer)
@@ -376,8 +406,6 @@ impl Hash<'_> {
             }
         })
     }
-
-    fn load_key()
 }
 
 impl<'a> DigestHash<'a, 32> for Hash<'a> {
@@ -391,6 +419,10 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
     ) -> Result<(), (kernel::ErrorCode, &'static mut [u8; 32])> {
         if self.busy.get() {
             return Err((ErrorCode::BUSY, digest));
+        }
+        // we cannot make any computations without setting a mode.
+        if self.mode.get().is_none() {
+            return Err((ErrorCode::INVAL, digest));
         }
         let regs = self.regs;
         // set the padding
@@ -463,31 +495,29 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
         ),
     > {
         if self.busy.get() {
-            Err((ErrorCode::BUSY, data))
-        } else {
-            debug!("SHA: Entered SHA data adder");
-            if data.len() > self.regs.sr.read(SR::NBWE) as usize {
-                self.regs.imr.modify(IMR::DINIE::SET);
-            }
-            self.busy.set(true);
-            self.data.set(Some(SubSliceMutImmut::Mutable(data)));
-
-            let ret = self.data_progress();
-
-            // debug!("SHA: Data processed");
-
-            if ret {
-                debug!("SHA: More data to add");
-            } else {
-                debug!("SHA: No more data to add");
-                // Or do I need to call the client directly?
-                // Personally, I don't think so, we need to wait for another cycle,
-                // when kernel is able to process it
-                self.deferred_call.set();
-            }
-
-            Ok(())
+            return Err((ErrorCode::BUSY, data));
         }
+        // we cannot process data without setting mode.
+        if self.mode.get().is_none() {
+            return Err((ErrorCode::INVAL, data));
+        }
+        debug!("SHA: Entered SHA data adder");
+        if data.len() > self.regs.sr.read(SR::NBWE) as usize {
+            self.regs.imr.modify(IMR::DINIE::SET);
+        }
+        self.busy.set(true);
+        self.data.set(Some(SubSliceMutImmut::Mutable(data)));
+
+        let ret = self.data_progress();
+
+        // debug!("SHA: Data processed");
+
+        if !ret {
+            debug!("SHA: No more data to add");
+            self.deferred_call.set();
+        }
+
+        Ok(())
     }
 
     fn clear_data(&self) {
@@ -515,11 +545,40 @@ impl<'a> Digest<'a, 32> for Hash<'a> {
     }
 }
 
+impl Md5 for Hash<'_> {
+    fn set_mode_md5(&self) -> Result<(), ErrorCode> {
+        if self.busy.get() {
+            return Err(kernel::ErrorCode::BUSY);
+        }
+        self.mode.set(Some(Mode::MD5));
+        self.regs
+            .cr
+            .modify(CR::ALGO::MD5 + CR::MODE::CLEAR + CR::DATATYPE::_8bitData + CR::INIT::SET);
+        self.hmac_key.clear();
+        Ok(())
+    }
+}
+
+impl Sha1 for Hash<'_> {
+    fn set_mode_sha1(&self) -> Result<(), ErrorCode> {
+        if self.busy.get() {
+            return Err(kernel::ErrorCode::BUSY);
+        }
+        self.mode.set(Some(Mode::SHA1));
+        self.regs
+            .cr
+            .modify(CR::ALGO::SHA_1 + CR::MODE::CLEAR + CR::DATATYPE::_8bitData + CR::INIT::SET);
+        self.hmac_key.clear();
+        Ok(())
+    }
+}
+
 impl Sha224 for Hash<'_> {
     fn set_mode_sha224(&self) -> Result<(), kernel::ErrorCode> {
         if self.busy.get() {
             return Err(kernel::ErrorCode::BUSY);
         }
+        self.mode.set(Some(Mode::SHA2_224));
         self.regs
             .cr
             .modify(CR::ALGO::SHA2_224 + CR::MODE::CLEAR + CR::DATATYPE::_8bitData + CR::INIT::SET);
@@ -533,8 +592,9 @@ impl Sha256 for Hash<'_> {
         if self.busy.get() {
             return Err(kernel::ErrorCode::BUSY);
         }
-        let regs = self.regs;
-        regs.cr
+        self.mode.set(Some(Mode::SHA2_256));
+        self.regs
+            .cr
             .modify(CR::ALGO::SHA2_256 + CR::MODE::CLEAR + CR::DATATYPE::_8bitData + CR::INIT::SET);
         self.hmac_key.clear();
         Ok(())
@@ -552,10 +612,10 @@ impl HmacSha256 for Hash<'_> {
         self.regs
             .cr
             .modify(CR::ALGO::SHA2_256 + CR::DATATYPE::_8bitData + CR::MODE::SET);
-        if key.len() > 64 {
+        if key.len() > (HASH_FIFO_SIZE - 1) * 4 {
             self.regs.cr.modify(CR::LKEY::SET + CR::INIT::SET);
             // set the interrupt
-            if key.len() > 68 {
+            if key.len() > HASH_FIFO_SIZE * 4 {
                 self.regs.imr.modify(IMR::DINIE::SET);
             }
         } else {
@@ -592,7 +652,7 @@ impl HmacSha384 for Hash<'_> {
 }
 
 impl HmacSha512 for Hash<'_> {
-    fn set_mode_hmacsha512(&self, key: &[u8]) -> Result<(), kernel::ErrorCode> {
+    fn set_mode_hmacsha512(&self, _key: &[u8]) -> Result<(), kernel::ErrorCode> {
         Err(kernel::ErrorCode::NOSUPPORT)
     }
 }

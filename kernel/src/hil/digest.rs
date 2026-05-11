@@ -281,6 +281,14 @@ pub trait DigestDataVerify<'a, const DIGEST_LEN: usize>:
     fn set_client(&'a self, client: &'a dyn ClientDataVerify<DIGEST_LEN>);
 }
 
+pub trait Md5 {
+    fn set_mode_md5(&self) -> Result<(), ErrorCode>;
+}
+
+pub trait Sha1 {
+    fn set_mode_sha1(&self) -> Result<(), ErrorCode>;
+}
+
 pub trait Sha224 {
     /// Call before adding data to perform Sha224
     fn set_mode_sha224(&self) -> Result<(), ErrorCode>;
