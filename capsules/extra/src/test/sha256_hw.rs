@@ -32,7 +32,7 @@ pub struct TestSha256<'a, H: digest::Digest<'a, 32>> {
 // as well as zeroing out incomplete blocks).
 const CHUNK_SIZE: usize = 32;
 
-impl<'a, H: digest::Digest<'a, 32> + digest::Sha224 + digest::Bit8Data> TestSha256<'a, H> {
+impl<'a, H: digest::Digest<'a, 32> + digest::Sha256 + digest::Bit8Data> TestSha256<'a, H> {
     pub fn new(
         sha: &'a H,
         data: &'static mut [u8],
@@ -53,7 +53,7 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha224 + digest::Bit8Data> TestSha2
         // We need to choose the algo and data format
         // TODO(frihetselsker): Handle errors in the capsules more gracefully
         let _ = self.sha.set_data_type_8_bit();
-        let _ = self.sha.set_mode_sha224();
+        let _ = self.sha.set_mode_sha256();
         debug!("Test_SHA: Set the mode");
         self.sha.set_client(self);
         debug!("Test_SHA: Set the client");
@@ -70,7 +70,7 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha224 + digest::Bit8Data> TestSha2
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32> + digest::Sha224> digest::ClientData<32> for TestSha256<'a, H> {
+impl<'a, H: digest::Digest<'a, 32>> digest::ClientData<32> for TestSha256<'a, H> {
     fn add_data_done(&self, _result: Result<(), ErrorCode>, _data: SubSlice<'static, u8>) {
         unimplemented!()
     }
@@ -119,9 +119,7 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha224> digest::ClientData<32> for 
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32> + digest::Sha224> digest::ClientVerify<32>
-    for TestSha256<'a, H>
-{
+impl<'a, H: digest::Digest<'a, 32>> digest::ClientVerify<32> for TestSha256<'a, H> {
     fn verification_done(&self, result: Result<bool, ErrorCode>, compare: &'static mut [u8; 32]) {
         self.hash.put(Some(compare));
         debug!("Sha256Test: Verification result: {:?}", result);
@@ -147,13 +145,13 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha224> digest::ClientVerify<32>
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32> + digest::Sha224> digest::ClientHash<32> for TestSha256<'a, H> {
+impl<'a, H: digest::Digest<'a, 32>> digest::ClientHash<32> for TestSha256<'a, H> {
     fn hash_done(&self, _result: Result<(), ErrorCode>, _digest: &'static mut [u8; 32]) {
         debug!("Test_SHA: hash_done is not used for now");
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32> + digest::Sha224> CapsuleTest for TestSha256<'a, H> {
+impl<'a, H: digest::Digest<'a, 32>> CapsuleTest for TestSha256<'a, H> {
     fn set_client(&self, client: &'static dyn CapsuleTestClient) {
         self.client.set(client);
     }
