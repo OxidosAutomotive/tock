@@ -101,6 +101,7 @@ impl digest::ClientHash<32> for TestHmacSha256 {
         for i in 0..32 {
             if self.correct[i] != digest[i] {
                 error = true;
+                break;
             }
         }
         if !error {

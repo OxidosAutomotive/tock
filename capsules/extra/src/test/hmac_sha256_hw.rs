@@ -14,6 +14,8 @@ use kernel::utilities::leasable_buffer::SubSlice;
 use kernel::utilities::leasable_buffer::SubSliceMut;
 use kernel::ErrorCode;
 
+use kernel::debug;
+
 pub struct TestHmacSha256<'a, H: digest::Digest<'a, 32>> {
     hmac: &'a H,
     key: TakeCell<'static, [u8]>,        // The key to use for HMAC
@@ -96,8 +98,13 @@ impl<'a, H: digest::Digest<'a, 32>> digest::ClientHash<32> for TestHmacSha256<'a
     fn hash_done(&self, _result: Result<(), ErrorCode>, digest: &'static mut [u8; 32]) {
         let mut error = false;
         for i in 0..32 {
+            // debug!(
+            //     "Test: Correct 0x{:02x}, Hash 0x{:02x}",
+            //     self.correct[i], digest[i]
+            // );
             if self.correct[i] != digest[i] {
                 error = true;
+                break;
             }
         }
         if !error {

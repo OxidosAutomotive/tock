@@ -168,9 +168,9 @@ enum State {
     Add,
     Run,
     KeyLoadAdd,
-    KeyProcessAdd,
+    KeyDigestAdd,
     KeyLoadRun,
-    KeyProcessRun,
+    KeyDigestRun,
 }
 
 pub struct Hash<'a> {
@@ -215,26 +215,20 @@ impl Hash<'_> {
 
     pub fn handle_interupts(&self) {
         let regs = self.regs;
-        debug!("SHA: Entered interrupt");
+
+        if let Some(state) = self.state.get() {
+            debug!("Current state is {:?}", state);
+        }
         // Disable all the interrupts
         regs.imr.modify(IMR::DCIE::CLEAR + IMR::DINIE::CLEAR);
 
         // Digest Calculation completed?
         if regs.sr.read(SR::DCIS) != 0 {
+            debug!("SHA: Entered Digest Calculation interrupt");
             if let Some(state) = self.state.get() {
-                // If key is present, then we need to process it accordingly.
-                debug!("Current state is {:?}", state);
+                // If key is present, then we need to process it accordingly
                 match state {
-                    State::KeyProcessAdd => {
-                        self.state.set(Some(State::Add));
-                        self.hmac_key_index.take();
-                        if !self.data_progress() {
-                            self.deferred_call.set();
-                        } else {
-                            regs.imr.modify(IMR::DINIE::SET);
-                        }
-                    }
-                    State::KeyProcessRun => {
+                    State::KeyDigestRun => {
                         // it is time to return data
                         // reset index
                         self.hmac_key_index.take();
@@ -253,7 +247,7 @@ impl Hash<'_> {
             }
             // New data can be written (if we filled the FIFO buffer)
         } else if regs.sr.read(SR::DINIS) != 0 {
-            debug!("SHA: The whole buffer has been processed, we can add more!");
+            debug!("SHA: Entered Data Input interrupt");
             if let Some(state) = self.state.get() {
                 match state {
                     State::Add => {
@@ -275,8 +269,21 @@ impl Hash<'_> {
                     State::KeyLoadAdd => {
                         self.load_key(true);
                     }
-                    State::KeyLoadRun => {
+                    State::KeyLoadRun | State::Run => {
                         self.load_key(false);
+                    }
+                    State::KeyDigestAdd => {
+                        self.state.set(Some(State::Add));
+                        self.hmac_key_index.take();
+                        debug!("It is time to write the actual data");
+                        if !self.data_progress() {
+                            // we added all the data
+                            debug!("we added all the data");
+                            self.deferred_call.set();
+                        } else {
+                            debug!("we need more data");
+                            regs.imr.modify(IMR::DINIE::SET);
+                        }
                     }
                     _ => (),
                 }
@@ -336,6 +343,11 @@ impl Hash<'_> {
 
                         let idx = i * 4;
 
+                        debug!(
+                            "SHA: Check {} - Data: 0x{:02x}{:02x}{:02x}{:02x}",
+                            i, d[0], d[1], d[2], d[3]
+                        );
+
                         digest[idx + 0] = d[0];
                         digest[idx + 1] = d[1];
                         digest[idx + 2] = d[2];
@@ -346,6 +358,7 @@ impl Hash<'_> {
 
                     // self.clear_data();
                     regs.cr.modify(CR::INIT::SET);
+                    // release the peripheral
                     self.state.take();
                     client.hash_done(Ok(()), digest);
                 }
@@ -378,7 +391,7 @@ impl Hash<'_> {
             ]);
             // debug!("SHA: big word: 0x{:02x}", d);
 
-            //debug!("SHA: 32-bit word written {:02x}", d);
+            debug!("SHA: 32-bit word written {:02x}", d);
             //
 
             regs.din.set(d);
@@ -472,26 +485,26 @@ impl Hash<'_> {
             self.hmac_key_index.get()
         );
         if self.hmac_key_len.get() == self.hmac_key_index.get() {
-            regs.imr.modify(IMR::DCIE::SET);
+            regs.imr.modify(IMR::DINIE::SET);
             if self.leftover_buffer.get() != 0 {
                 self.handle_leftover();
             }
 
             self.state.update(|_| {
                 if is_inner {
-                    Some(State::KeyProcessAdd)
+                    Some(State::KeyDigestAdd)
                 } else {
-                    Some(State::KeyProcessRun)
+                    Some(State::KeyDigestRun)
                 }
             });
             // start the final digest calculation
-            debug!("SHA: Start computation");
-            debug!(
-                "SHA: busy {}, pushed {}, left {}",
-                regs.sr.read(SR::BUSY),
-                regs.sr.read(SR::NBWP),
-                regs.sr.read(SR::NBWE)
-            );
+            debug!("KEY-SHA: Start computation");
+            // debug!(
+            //     "SHA: busy {}, pushed {}, left {}",
+            //     regs.sr.read(SR::BUSY),
+            //     regs.sr.read(SR::NBWP),
+            //     regs.sr.read(SR::NBWE)
+            // );
             regs.str.modify(STR::DCAL::SET);
         } else {
             // We need to process more
@@ -542,10 +555,16 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
         // Do I need to create a separate function?
         if self.leftover_buffer.get() != 0 {
             self.handle_leftover();
+        } else {
+            regs.str.modify(STR::NBLW.val(0));
         }
         // enable the interrupt
         //debug!("SHA: Enable the interrupt for digest finish");
-        regs.imr.modify(IMR::DCIE::SET);
+        if self.hmac_key.is_some() {
+            regs.imr.modify(IMR::DCIE::SET + IMR::DINIE::SET);
+        } else {
+            regs.imr.modify(IMR::DCIE::SET);
+        }
         // start the final digest calculation
         debug!("SHA: Start computation");
         regs.str.modify(STR::DCAL::SET);
@@ -618,7 +637,10 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             return Err((ErrorCode::INVAL, data));
         }
         debug!("SHA: Entered SHA data adder");
-        if data.len() > self.regs.sr.read(SR::NBWE) as usize {
+        if data.len() > self.regs.sr.read(SR::NBWE) as usize
+            || (self.hmac_key_len.get() > self.regs.sr.read(SR::NBWE) as usize
+                && self.hmac_key_len.get() > self.hmac_key_index.get())
+        {
             self.regs.imr.modify(IMR::DINIE::SET);
         }
 
@@ -630,7 +652,7 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             self.hmac_key_index.get()
         );
         // If we have key and it is not loaded yet, do load it now
-        if self.hmac_key.is_some() && self.hmac_key_len.get() >= self.hmac_key_index.get() {
+        if self.hmac_key.is_some() && self.hmac_key_len.get() > self.hmac_key_index.get() {
             debug!("HMAC-SHA: We need to load a key");
             self.load_key(true);
         } else {
