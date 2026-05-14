@@ -6,7 +6,7 @@
 use crate::dma::{ChannelId, Dma};
 use crate::exti;
 use crate::gpio;
-use crate::hash::Hash;
+use crate::hash;
 use crate::nvic::{
     EXTI13_IRQ, GPDMA1_CH0_IRQ, GPDMA1_CH10_IRQ, GPDMA1_CH11_IRQ, GPDMA1_CH12_IRQ, GPDMA1_CH13_IRQ,
     GPDMA1_CH14_IRQ, GPDMA1_CH15_IRQ, GPDMA1_CH1_IRQ, GPDMA1_CH2_IRQ, GPDMA1_CH3_IRQ,
@@ -48,7 +48,7 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
         usart1: &'a usart::Usart<'a>,
         exti: &'a exti::Exti<'a>,
         dma1: &'a Dma,
-        hash: &'a Hash,
+        hash: &'a hash::Hash<'a>,
     ) -> Self {
         Self {
             rcc: rcc::Rcc::new(rcc::RCC_BASE),
@@ -58,6 +58,7 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
             dma1,
             gpio_a: gpio::Port::new(gpio::GPIO_A_BASE, exti, gpio::GpioPort::PortA),
             gpio_c: gpio::Port::new(gpio::GPIO_C_BASE, exti, gpio::GpioPort::PortC),
+            hash,
         }
     }
 

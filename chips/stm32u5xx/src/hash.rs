@@ -19,7 +19,7 @@ use kernel::debug;
 
 register_structs! {
     /// Hash processor
-    HashRegisters {
+    pub HashRegisters {
         /// control register
         (0x000 => cr: ReadWrite<u32, CR::Register>),
         /// data input register
@@ -133,7 +133,7 @@ CSR [
     CS OFFSET(0) NUMBITS(32) []
 ]
 ];
-const HASH_BASE: StaticRef<HashRegisters> =
+pub const HASH_BASE: StaticRef<HashRegisters> =
     unsafe { StaticRef::new(0x420C0400 as *const HashRegisters) };
 
 // In terms of 8-bit words
@@ -534,7 +534,7 @@ impl Hash<'_> {
 }
 
 impl<'a> DigestHash<'a, 32> for Hash<'a> {
-    fn set_hash_client(&'a self, client: &'a dyn kernel::hil::digest::ClientHash<32>) {
+    fn set_hash_client(&'a self, _client: &'a dyn kernel::hil::digest::ClientHash<32>) {
         unimplemented!();
     }
 
@@ -576,7 +576,7 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
 }
 
 impl<'a> DigestData<'a, 32> for Hash<'a> {
-    fn set_data_client(&'a self, client: &'a dyn kernel::hil::digest::ClientData<32>) {
+    fn set_data_client(&'a self, _client: &'a dyn kernel::hil::digest::ClientData<32>) {
         unimplemented!();
     }
 
@@ -686,7 +686,7 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
 }
 
 impl<'a> DigestVerify<'a, 32> for Hash<'a> {
-    fn set_verify_client(&'a self, client: &'a dyn kernel::hil::digest::ClientVerify<32>) {
+    fn set_verify_client(&'a self, _client: &'a dyn kernel::hil::digest::ClientVerify<32>) {
         unimplemented!();
     }
 

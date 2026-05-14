@@ -148,7 +148,6 @@ unsafe fn start() -> (
     >();
 
     // Create Individual Drivers
-<<<<<<< HEAD
     let exti = static_init!(
         stm32u545::exti::Exti<'static>,
         stm32u545::exti::Exti::new(stm32u545::exti::EXTI_BASE)
@@ -162,9 +161,13 @@ unsafe fn start() -> (
         stm32u545::usart::Usart::new(stm32u545::usart::USART1_BASE)
     );
 
-    let hash = stm32u545::hash::init();
-    hash.register();
+    let hash = static_init!(
+        stm32u545::hash::Hash<'static>,
+        stm32u545::hash::Hash::new(stm32u545::hash::HASH_BASE)
+    );
 
+    // let hash = stm32u545::hash::init();
+    hash.register();
 
     // Load Peripherals Bundle
     let periphs = static_init!(
