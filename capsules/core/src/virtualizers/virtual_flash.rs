@@ -37,19 +37,28 @@ use kernel::hil;
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::ErrorCode;
 
+use crate::virtualizers::selection_policy::{RoundRobinPolicy, SelectionPolicy};
+
 /// Handle keeping a list of active users of flash hardware and serialize their
 /// requests.
 ///
 /// After each completed request the list is checked to see if there
 /// is another flash user with an outstanding read, write, or erase
 /// request.
-pub struct MuxFlash<'a, F: hil::flash::Flash + 'static> {
+pub struct MuxFlash<
+    'a,
+    F: hil::flash::Flash + 'static,
+    P: SelectionPolicy<&'a FlashUser<'a, F, P>> = RoundRobinPolicy,
+> {
     flash: &'a F,
-    users: List<'a, FlashUser<'a, F>>,
-    inflight: OptionalCell<&'a FlashUser<'a, F>>,
+    users: List<'a, FlashUser<'a, F, P>>,
+    inflight: OptionalCell<&'a FlashUser<'a, F, P>>,
+    selection_policy: P,
 }
 
-impl<F: hil::flash::Flash> hil::flash::Client<F> for MuxFlash<'_, F> {
+impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> hil::flash::Client<F>
+    for MuxFlash<'a, F, P>
+{
     fn read_complete(
         &self,
         pagebuffer: &'static mut F::Page,
@@ -80,12 +89,15 @@ impl<F: hil::flash::Flash> hil::flash::Client<F> for MuxFlash<'_, F> {
     }
 }
 
-impl<'a, F: hil::flash::Flash> MuxFlash<'a, F> {
-    pub const fn new(flash: &'a F) -> MuxFlash<'a, F> {
+impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> MuxFlash<'a, F, P> {
+    // NOTE(frihetselsker): can I remove const?
+    // pub const fn new(flash: &'a F) -> MuxFlash<'a, F, RoundRobinPolicy> {
+    pub fn new(flash: &'a F) -> MuxFlash<'a, F, RoundRobinPolicy> {
         MuxFlash {
             flash,
             users: List::new(),
             inflight: OptionalCell::empty(),
+            selection_policy: RoundRobinPolicy::default(),
         }
     }
 
@@ -94,9 +106,8 @@ impl<'a, F: hil::flash::Flash> MuxFlash<'a, F> {
     fn do_next_op(&self) {
         if self.inflight.is_none() {
             let mnode = self
-                .users
-                .iter()
-                .find(|node| node.operation.get() != Op::Idle);
+                .selection_policy
+                .select(self.users.iter(), |node| node.operation.get() != Op::Idle);
             mnode.map(|node| {
                 node.buffer.take().map_or_else(
                     || {
@@ -145,16 +156,20 @@ enum Op {
 /// these to be a user of the flash. The `new()` function handles most
 /// of the work, a user only has to pass in a reference to the
 /// MuxFlash object.
-pub struct FlashUser<'a, F: hil::flash::Flash + 'static> {
-    mux: &'a MuxFlash<'a, F>,
+pub struct FlashUser<
+    'a,
+    F: hil::flash::Flash + 'static,
+    P: SelectionPolicy<&'a FlashUser<'a, F, P>>,
+> {
+    mux: &'a MuxFlash<'a, F, P>,
     buffer: TakeCell<'static, F::Page>,
     operation: Cell<Op>,
-    next: ListLink<'a, FlashUser<'a, F>>,
-    client: OptionalCell<&'a dyn hil::flash::Client<FlashUser<'a, F>>>,
+    next: ListLink<'a, FlashUser<'a, F, P>>,
+    client: OptionalCell<&'a dyn hil::flash::Client<FlashUser<'a, F, P>>>,
 }
 
-impl<'a, F: hil::flash::Flash> FlashUser<'a, F> {
-    pub fn new(mux: &'a MuxFlash<'a, F>) -> FlashUser<'a, F> {
+impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> FlashUser<'a, F, P> {
+    pub fn new(mux: &'a MuxFlash<'a, F, P>) -> FlashUser<'a, F, P> {
         FlashUser {
             mux,
             buffer: TakeCell::empty(),
@@ -165,8 +180,12 @@ impl<'a, F: hil::flash::Flash> FlashUser<'a, F> {
     }
 }
 
-impl<'a, F: hil::flash::Flash, C: hil::flash::Client<Self>> hil::flash::HasClient<'a, C>
-    for FlashUser<'a, F>
+impl<
+        'a,
+        F: hil::flash::Flash,
+        C: hil::flash::Client<Self>,
+        P: SelectionPolicy<&'a FlashUser<'a, F, P>>,
+    > hil::flash::HasClient<'a, C> for FlashUser<'a, F, P>
 {
     fn set_client(&'a self, client: &'a C) {
         self.mux.users.push_head(self);
@@ -174,7 +193,9 @@ impl<'a, F: hil::flash::Flash, C: hil::flash::Client<Self>> hil::flash::HasClien
     }
 }
 
-impl<F: hil::flash::Flash> hil::flash::Client<F> for FlashUser<'_, F> {
+impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> hil::flash::Client<F>
+    for FlashUser<'a, F, P>
+{
     fn read_complete(
         &self,
         pagebuffer: &'static mut F::Page,
@@ -202,13 +223,17 @@ impl<F: hil::flash::Flash> hil::flash::Client<F> for FlashUser<'_, F> {
     }
 }
 
-impl<'a, F: hil::flash::Flash> ListNode<'a, FlashUser<'a, F>> for FlashUser<'a, F> {
-    fn next(&'a self) -> &'a ListLink<'a, FlashUser<'a, F>> {
+impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>>
+    ListNode<'a, FlashUser<'a, F, P>> for FlashUser<'a, F, P>
+{
+    fn next(&'a self) -> &'a ListLink<'a, FlashUser<'a, F, P>> {
         &self.next
     }
 }
 
-impl<F: hil::flash::Flash> hil::flash::Flash for FlashUser<'_, F> {
+impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> hil::flash::Flash
+    for FlashUser<'a, F, P>
+{
     type Page = F::Page;
 
     fn read_page(

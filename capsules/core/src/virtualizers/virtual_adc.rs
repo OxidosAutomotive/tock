@@ -11,14 +11,23 @@ use kernel::hil;
 use kernel::utilities::cells::OptionalCell;
 use kernel::ErrorCode;
 
+use crate::virtualizers::selection_policy::{RoundRobinPolicy, SelectionPolicy};
+
 /// ADC Mux
-pub struct MuxAdc<'a, A: hil::adc::Adc<'a>> {
+pub struct MuxAdc<
+    'a,
+    A: hil::adc::Adc<'a>,
+    P: SelectionPolicy<&'a AdcDevice<'a, A, P>> = RoundRobinPolicy,
+> {
     adc: &'a A,
-    devices: List<'a, AdcDevice<'a, A>>,
-    inflight: OptionalCell<&'a AdcDevice<'a, A>>,
+    devices: List<'a, AdcDevice<'a, A, P>>,
+    inflight: OptionalCell<&'a AdcDevice<'a, A, P>>,
+    selection_policy: P,
 }
 
-impl<'a, A: hil::adc::Adc<'a>> hil::adc::Client for MuxAdc<'a, A> {
+impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> hil::adc::Client
+    for MuxAdc<'a, A, P>
+{
     fn sample_ready(&self, sample: u16) {
         self.inflight.take().map(|inflight| {
             for node in self.devices.iter() {
@@ -35,18 +44,21 @@ impl<'a, A: hil::adc::Adc<'a>> hil::adc::Client for MuxAdc<'a, A> {
     }
 }
 
-impl<'a, A: hil::adc::Adc<'a>> MuxAdc<'a, A> {
-    pub const fn new(adc: &'a A) -> MuxAdc<'a, A> {
+impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> MuxAdc<'a, A, P> {
+    pub fn new(adc: &'a A) -> MuxAdc<'a, A, RoundRobinPolicy> {
         MuxAdc {
             adc,
             devices: List::new(),
             inflight: OptionalCell::empty(),
+            selection_policy: RoundRobinPolicy::default(),
         }
     }
 
     fn do_next_op(&self) {
         if self.inflight.is_none() {
-            let mnode = self.devices.iter().find(|node| node.operation.is_some());
+            let mnode = self
+                .selection_policy
+                .select(self.devices.iter(), |node| node.operation.is_some());
             mnode.map(|node| {
                 let started = node.operation.map_or(false, |operation| match operation {
                     Operation::OneSample => {
@@ -78,16 +90,16 @@ pub(crate) enum Operation {
 }
 
 /// Virtual ADC device
-pub struct AdcDevice<'a, A: hil::adc::Adc<'a>> {
-    mux: &'a MuxAdc<'a, A>,
+pub struct AdcDevice<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> {
+    mux: &'a MuxAdc<'a, A, P>,
     channel: A::Channel,
     operation: OptionalCell<Operation>,
-    next: ListLink<'a, AdcDevice<'a, A>>,
+    next: ListLink<'a, AdcDevice<'a, A, P>>,
     client: OptionalCell<&'a dyn hil::adc::Client>,
 }
 
-impl<'a, A: hil::adc::Adc<'a>> AdcDevice<'a, A> {
-    pub const fn new(mux: &'a MuxAdc<'a, A>, channel: A::Channel) -> AdcDevice<'a, A> {
+impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> AdcDevice<'a, A, P> {
+    pub const fn new(mux: &'a MuxAdc<'a, A, P>, channel: A::Channel) -> AdcDevice<'a, A, P> {
         let adc_user = AdcDevice {
             mux,
             channel,
@@ -103,13 +115,17 @@ impl<'a, A: hil::adc::Adc<'a>> AdcDevice<'a, A> {
     }
 }
 
-impl<'a, A: hil::adc::Adc<'a>> ListNode<'a, AdcDevice<'a, A>> for AdcDevice<'a, A> {
-    fn next(&'a self) -> &'a ListLink<'a, AdcDevice<'a, A>> {
+impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>>
+    ListNode<'a, AdcDevice<'a, A, P>> for AdcDevice<'a, A, P>
+{
+    fn next(&'a self) -> &'a ListLink<'a, AdcDevice<'a, A, P>> {
         &self.next
     }
 }
 
-impl<'a, A: hil::adc::Adc<'a>> hil::adc::AdcChannel<'a> for AdcDevice<'a, A> {
+impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> hil::adc::AdcChannel<'a>
+    for AdcDevice<'a, A, P>
+{
     fn sample(&self) -> Result<(), ErrorCode> {
         self.operation.set(Operation::OneSample);
         self.mux.do_next_op();

@@ -13,16 +13,28 @@ use kernel::utilities::cells::{MapCell, OptionalCell};
 use kernel::utilities::leasable_buffer::SubSliceMut;
 use kernel::ErrorCode;
 
+use crate::virtualizers::selection_policy::{RoundRobinPolicy, SelectionPolicy};
+
 /// The Mux struct manages multiple Spi clients. Each client may have
 /// at most one outstanding Spi request.
-pub struct MuxSpiMaster<'a, Spi: hil::spi::SpiMaster<'a>> {
+pub struct MuxSpiMaster<
+    'a,
+    Spi: hil::spi::SpiMaster<'a>,
+    P: SelectionPolicy<&'a VirtualSpiMasterDevice<'a, Spi, P>>,
+> {
     spi: &'a Spi,
-    devices: List<'a, VirtualSpiMasterDevice<'a, Spi>>,
-    inflight: OptionalCell<&'a VirtualSpiMasterDevice<'a, Spi>>,
+    devices: List<'a, VirtualSpiMasterDevice<'a, Spi, P>>,
+    inflight: OptionalCell<&'a VirtualSpiMasterDevice<'a, Spi, P>>,
+    selection_policy: P,
     deferred_call: DeferredCall,
 }
 
-impl<'a, Spi: hil::spi::SpiMaster<'a>> hil::spi::SpiMasterClient for MuxSpiMaster<'a, Spi> {
+impl<
+        'a,
+        Spi: hil::spi::SpiMaster<'a>,
+        P: SelectionPolicy<&'a VirtualSpiMasterDevice<'a, Spi, P>>,
+    > hil::spi::SpiMasterClient for MuxSpiMaster<'a, Spi, P>
+{
     fn read_write_done(
         &self,
         write_buffer: SubSliceMut<'static, u8>,
@@ -41,12 +53,18 @@ impl<'a, Spi: hil::spi::SpiMaster<'a>> hil::spi::SpiMasterClient for MuxSpiMaste
     }
 }
 
-impl<'a, Spi: hil::spi::SpiMaster<'a>> MuxSpiMaster<'a, Spi> {
-    pub fn new(spi: &'a Spi) -> Self {
-        Self {
+impl<
+        'a,
+        Spi: hil::spi::SpiMaster<'a>,
+        P: SelectionPolicy<&'a VirtualSpiMasterDevice<'a, Spi, P>>,
+    > MuxSpiMaster<'a, Spi, P>
+{
+    pub fn new(spi: &'a Spi) -> MuxSpiMaster<'a, Spi, RoundRobinPolicy> {
+        MuxSpiMaster {
             spi,
             devices: List::new(),
             inflight: OptionalCell::empty(),
+            selection_policy: RoundRobinPolicy::default(),
             deferred_call: DeferredCall::new(),
         }
     }
@@ -54,9 +72,9 @@ impl<'a, Spi: hil::spi::SpiMaster<'a>> MuxSpiMaster<'a, Spi> {
     fn do_next_op(&self) {
         if self.inflight.is_none() {
             let mnode = self
-                .devices
-                .iter()
-                .find(|node| node.operation.get() != Op::Idle);
+                .selection_policy
+                .select(self.devices.iter(), |node| node.operation.get() != Op::Idle);
+
             mnode.map(|node| {
                 let configuration = node.configuration.get();
                 let cs = configuration.chip_select;
@@ -126,7 +144,12 @@ impl<'a, Spi: hil::spi::SpiMaster<'a>> MuxSpiMaster<'a, Spi> {
     }
 }
 
-impl<'a, Spi: hil::spi::SpiMaster<'a>> DeferredCallClient for MuxSpiMaster<'a, Spi> {
+impl<
+        'a,
+        Spi: hil::spi::SpiMaster<'a>,
+        P: SelectionPolicy<&'a VirtualSpiMasterDevice<'a, Spi, P>>,
+    > DeferredCallClient for MuxSpiMaster<'a, Spi, P>
+{
     fn handle_deferred_call(&self) {
         self.do_next_op();
     }
@@ -162,21 +185,30 @@ impl<'a, Spi: hil::spi::SpiMaster<'a>> Clone for SpiConfiguration<'a, Spi> {
     }
 }
 
-pub struct VirtualSpiMasterDevice<'a, Spi: hil::spi::SpiMaster<'a>> {
-    mux: &'a MuxSpiMaster<'a, Spi>,
+pub struct VirtualSpiMasterDevice<
+    'a,
+    Spi: hil::spi::SpiMaster<'a>,
+    P: SelectionPolicy<&'a VirtualSpiMasterDevice<'a, Spi, P>> = RoundRobinPolicy,
+> {
+    mux: &'a MuxSpiMaster<'a, Spi, P>,
     configuration: Cell<SpiConfiguration<'a, Spi>>,
     txbuffer: MapCell<SubSliceMut<'static, u8>>,
     rxbuffer: MapCell<SubSliceMut<'static, u8>>,
     operation: Cell<Op>,
-    next: ListLink<'a, VirtualSpiMasterDevice<'a, Spi>>,
+    next: ListLink<'a, VirtualSpiMasterDevice<'a, Spi, P>>,
     client: OptionalCell<&'a dyn hil::spi::SpiMasterClient>,
 }
 
-impl<'a, Spi: hil::spi::SpiMaster<'a>> VirtualSpiMasterDevice<'a, Spi> {
+impl<
+        'a,
+        Spi: hil::spi::SpiMaster<'a>,
+        P: SelectionPolicy<&'a VirtualSpiMasterDevice<'a, Spi, P>>,
+    > VirtualSpiMasterDevice<'a, Spi, P>
+{
     pub fn new(
-        mux: &'a MuxSpiMaster<'a, Spi>,
+        mux: &'a MuxSpiMaster<'a, Spi, P>,
         chip_select: Spi::ChipSelect,
-    ) -> VirtualSpiMasterDevice<'a, Spi> {
+    ) -> VirtualSpiMasterDevice<'a, Spi, P> {
         VirtualSpiMasterDevice {
             mux,
             configuration: Cell::new(SpiConfiguration {
@@ -199,8 +231,11 @@ impl<'a, Spi: hil::spi::SpiMaster<'a>> VirtualSpiMasterDevice<'a, Spi> {
     }
 }
 
-impl<'a, Spi: hil::spi::SpiMaster<'a>> hil::spi::SpiMasterClient
-    for VirtualSpiMasterDevice<'a, Spi>
+impl<
+        'a,
+        Spi: hil::spi::SpiMaster<'a>,
+        P: SelectionPolicy<&'a VirtualSpiMasterDevice<'a, Spi, P>>,
+    > hil::spi::SpiMasterClient for VirtualSpiMasterDevice<'a, Spi, P>
 {
     fn read_write_done(
         &self,
@@ -214,16 +249,22 @@ impl<'a, Spi: hil::spi::SpiMaster<'a>> hil::spi::SpiMasterClient
     }
 }
 
-impl<'a, Spi: hil::spi::SpiMaster<'a>> ListNode<'a, VirtualSpiMasterDevice<'a, Spi>>
-    for VirtualSpiMasterDevice<'a, Spi>
+impl<
+        'a,
+        Spi: hil::spi::SpiMaster<'a>,
+        P: SelectionPolicy<&'a VirtualSpiMasterDevice<'a, Spi, P>>,
+    > ListNode<'a, VirtualSpiMasterDevice<'a, Spi, P>> for VirtualSpiMasterDevice<'a, Spi, P>
 {
-    fn next(&'a self) -> &'a ListLink<'a, VirtualSpiMasterDevice<'a, Spi>> {
+    fn next(&'a self) -> &'a ListLink<'a, VirtualSpiMasterDevice<'a, Spi, P>> {
         &self.next
     }
 }
 
-impl<'a, Spi: hil::spi::SpiMaster<'a>> hil::spi::SpiMasterDevice<'a>
-    for VirtualSpiMasterDevice<'a, Spi>
+impl<
+        'a,
+        Spi: hil::spi::SpiMaster<'a>,
+        P: SelectionPolicy<&'a VirtualSpiMasterDevice<'a, Spi, P>>,
+    > hil::spi::SpiMasterDevice<'a> for VirtualSpiMasterDevice<'a, Spi, P>
 {
     fn set_client(&self, client: &'a dyn SpiMasterClient) {
         self.client.set(client);

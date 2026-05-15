@@ -214,7 +214,7 @@ impl<'a, P: SelectionPolicy<&'a UartDevice<'a, P>>> uart::ReceiveClient for MuxU
 }
 
 impl<'a, P: SelectionPolicy<&'a UartDevice<'a, P>>> MuxUart<'a, P> {
-    /// Create a new Mux with the [`InsertionFirstPolicy`] selection policy.
+    /// Create a new Mux with the [`RoundRobinPolicy`] selection policy.
     pub fn new(
         uart: &'a dyn uart::Uart<'a>,
         buffer: &'static mut [u8],
