@@ -24,6 +24,7 @@
 //! );
 //! ```
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_i2c::{I2CDevice, MuxI2C};
 use capsules_core::virtualizers::virtual_spi::MuxSpiMaster;
 use capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice;
@@ -74,6 +75,18 @@ macro_rules! i2c_master_bus_component_static {
 
         (bus, i2c_device, address_buffer)
     };};
+    ($D:ty, $P:ty $(,)?) => {{
+        let address_buffer = kernel::static_buf!([u8; 1]);
+        let bus = kernel::static_buf!(capsules_extra::bus::I2CMasterBus<'static, $D, $P>);
+        let i2c_device = kernel::static_buf!(
+            capsules_core::virtualizers::virtual_i2c::I2CDevice<
+                'static,
+                capsules_extra::bus::I2CMasterBus<'static, $D, $P>,
+            >
+        );
+
+        (bus, i2c_device, address_buffer)
+    };};
 }
 
 pub struct Bus8080BusComponent<B: 'static + bus8080::Bus8080<'static>> {
@@ -98,22 +111,29 @@ impl<B: 'static + bus8080::Bus8080<'static>> Component for Bus8080BusComponent<B
     }
 }
 
-pub struct SpiMasterBusComponent<S: 'static + spi::SpiMaster<'static>> {
-    spi_mux: &'static MuxSpiMaster<'static, S>,
+pub struct SpiMasterBusComponent<
+    S: 'static + spi::SpiMaster<'static>,
+    P: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, P>>,
+> {
+    spi_mux: &'static MuxSpiMaster<'static, S, P>,
     chip_select: S::ChipSelect,
     baud_rate: u32,
     clock_phase: ClockPhase,
     clock_polarity: ClockPolarity,
 }
 
-impl<S: 'static + spi::SpiMaster<'static>> SpiMasterBusComponent<S> {
+impl<
+        S: 'static + spi::SpiMaster<'static>,
+        P: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, P>>,
+    > SpiMasterBusComponent<S, P>
+{
     pub fn new(
-        spi_mux: &'static MuxSpiMaster<'static, S>,
+        spi_mux: &'static MuxSpiMaster<'static, S, P>,
         chip_select: S::ChipSelect,
         baud_rate: u32,
         clock_phase: ClockPhase,
         clock_polarity: ClockPolarity,
-    ) -> SpiMasterBusComponent<S> {
+    ) -> SpiMasterBusComponent<S, P> {
         SpiMasterBusComponent {
             spi_mux,
             chip_select,
@@ -124,13 +144,17 @@ impl<S: 'static + spi::SpiMaster<'static>> SpiMasterBusComponent<S> {
     }
 }
 
-impl<S: 'static + spi::SpiMaster<'static>> Component for SpiMasterBusComponent<S> {
+impl<
+        S: 'static + spi::SpiMaster<'static>,
+        P: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, P>>,
+    > Component for SpiMasterBusComponent<S, P>
+{
     type StaticInput = (
-        &'static mut MaybeUninit<VirtualSpiMasterDevice<'static, S>>,
-        &'static mut MaybeUninit<SpiMasterBus<'static, VirtualSpiMasterDevice<'static, S>>>,
+        &'static mut MaybeUninit<VirtualSpiMasterDevice<'static, S, P>>,
+        &'static mut MaybeUninit<SpiMasterBus<'static, VirtualSpiMasterDevice<'static, S, P>>>,
         &'static mut MaybeUninit<[u8; core::mem::size_of::<usize>()]>,
     );
-    type Output = &'static SpiMasterBus<'static, VirtualSpiMasterDevice<'static, S>>;
+    type Output = &'static SpiMasterBus<'static, VirtualSpiMasterDevice<'static, S, P>>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let spi_device = static_buffer

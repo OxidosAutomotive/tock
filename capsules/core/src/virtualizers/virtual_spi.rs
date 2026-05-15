@@ -68,6 +68,15 @@ impl<
             deferred_call: DeferredCall::new(),
         }
     }
+    pub fn new_with_policy(spi: &'a Spi, selection_policy: P) -> MuxSpiMaster<'a, Spi, P> {
+        MuxSpiMaster {
+            spi,
+            devices: List::new(),
+            inflight: OptionalCell::empty(),
+            selection_policy,
+            deferred_call: DeferredCall::new(),
+        }
+    }
 
     fn do_next_op(&self) {
         if self.inflight.is_none() {

@@ -54,6 +54,15 @@ impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> MuxA
         }
     }
 
+    pub fn new_with_policy(adc: &'a A, selection_policy: P) -> MuxAdc<'a, A, P> {
+        MuxAdc {
+            adc,
+            devices: List::new(),
+            inflight: OptionalCell::empty(),
+            selection_policy,
+        }
+    }
+
     fn do_next_op(&self) {
         if self.inflight.is_none() {
             let mnode = self

@@ -6,7 +6,9 @@
 
 use capsules_core::adc::AdcDedicated;
 use capsules_core::adc::AdcVirtualized;
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_adc::{AdcDevice, MuxAdc};
+use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use kernel::capabilities;
 use kernel::component::Component;
@@ -57,19 +59,32 @@ macro_rules! adc_dedicated_component_static {
     };};
 }
 
-pub struct AdcMuxComponent<A: 'static + adc::Adc<'static>> {
+pub struct AdcMuxComponent<
+    A: 'static + adc::Adc<'static>,
+    P: 'static + SelectionPolicy<&'static AdcDevice<'static, A, P>>,
+> {
     adc: &'static A,
+    phantom: PhantomData<P>,
 }
 
-impl<A: 'static + adc::Adc<'static>> AdcMuxComponent<A> {
+impl<
+        A: 'static + adc::Adc<'static>,
+        P: 'static + SelectionPolicy<&'static AdcDevice<'static, A, P>>,
+    > AdcMuxComponent<A, P>
+{
     pub fn new(adc: &'static A) -> Self {
-        AdcMuxComponent { adc }
+        AdcMuxComponent {
+            adc,
+            phantom: PhantomData,
+        }
     }
 }
 
-impl<A: 'static + adc::Adc<'static>> Component for AdcMuxComponent<A> {
-    type StaticInput = &'static mut MaybeUninit<MuxAdc<'static, A>>;
-    type Output = &'static MuxAdc<'static, A>;
+impl<A: 'static + adc::Adc<'static>, P: SelectionPolicy<&'static AdcDevice<'static, A, P>>>
+    Component for AdcMuxComponent<A, P>
+{
+    type StaticInput = &'static mut MaybeUninit<MuxAdc<'static, A, P>>;
+    type Output = &'static MuxAdc<'static, A, P>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let adc_mux = static_buffer.write(MuxAdc::new(self.adc));
@@ -80,13 +95,20 @@ impl<A: 'static + adc::Adc<'static>> Component for AdcMuxComponent<A> {
     }
 }
 
-pub struct AdcComponent<A: 'static + adc::Adc<'static>> {
-    adc_mux: &'static MuxAdc<'static, A>,
+pub struct AdcComponent<
+    A: 'static + adc::Adc<'static>,
+    P: 'static + SelectionPolicy<&'static AdcDevice<'static, A, P>>,
+> {
+    adc_mux: &'static MuxAdc<'static, A, P>,
     channel: A::Channel,
 }
 
-impl<A: 'static + adc::Adc<'static>> AdcComponent<A> {
-    pub fn new(mux: &'static MuxAdc<'static, A>, channel: A::Channel) -> Self {
+impl<
+        A: 'static + adc::Adc<'static>,
+        P: 'static + SelectionPolicy<&'static AdcDevice<'static, A, P>>,
+    > AdcComponent<A, P>
+{
+    pub fn new(mux: &'static MuxAdc<'static, A, P>, channel: A::Channel) -> Self {
         AdcComponent {
             adc_mux: mux,
             channel,
@@ -94,9 +116,11 @@ impl<A: 'static + adc::Adc<'static>> AdcComponent<A> {
     }
 }
 
-impl<A: 'static + adc::Adc<'static>> Component for AdcComponent<A> {
-    type StaticInput = &'static mut MaybeUninit<AdcDevice<'static, A>>;
-    type Output = &'static AdcDevice<'static, A>;
+impl<A: 'static + adc::Adc<'static>, P: SelectionPolicy<&'static AdcDevice<'static, A, P>>>
+    Component for AdcComponent<A, P>
+{
+    type StaticInput = &'static mut MaybeUninit<AdcDevice<'static, A, P>>;
+    type Output = &'static AdcDevice<'static, A, P>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let adc_device = static_buffer.write(AdcDevice::new(self.adc_mux, self.channel));

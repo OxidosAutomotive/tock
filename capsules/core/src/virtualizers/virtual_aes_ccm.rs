@@ -167,6 +167,18 @@ impl<
         }
     }
 
+    pub fn new_with_policy(aes: &'a A, selection_policy: P) -> MuxAES128CCM<'a, A, P> {
+        aes.enable(); // enable the hardware, in case it's forgotten elsewhere
+        MuxAES128CCM {
+            aes,
+            client: OptionalCell::empty(),
+            ccm_clients: List::new(),
+            inflight: OptionalCell::empty(),
+            deferred_call: DeferredCall::new(),
+            selection_policy,
+        }
+    }
+
     /// Asynchronously executes the next operation, if any. Used by calls
     /// to trigger do_next_op such that it will execute after the call
     /// returns.

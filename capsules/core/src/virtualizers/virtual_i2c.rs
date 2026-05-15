@@ -83,6 +83,26 @@ impl<
         }
     }
 
+    pub fn new_with_policy(
+        i2c: &'a I,
+        smbus: Option<&'a S>,
+        i2c_selection_policy: PI,
+        smbus_selection_policy: PS,
+    ) -> MuxI2C<'a, I, S, PI, PS> {
+        MuxI2C {
+            i2c,
+            smbus,
+            i2c_devices: List::new(),
+            smbus_devices: List::new(),
+            enabled: Cell::new(0),
+            i2c_inflight: OptionalCell::empty(),
+            smbus_inflight: OptionalCell::empty(),
+            deferred_call: DeferredCall::new(),
+            i2c_selection_policy,
+            smbus_selection_policy,
+        }
+    }
+
     fn enable(&self) {
         let enabled = self.enabled.get();
         self.enabled.set(enabled + 1);
