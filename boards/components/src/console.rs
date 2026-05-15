@@ -38,7 +38,7 @@
 use capsules_core::console;
 use capsules_core::console_ordered::ConsoleOrdered;
 
-use capsules_core::virtualizers::selection_policy::{InsertionFirstPolicy, SelectionPolicy};
+use capsules_core::virtualizers::selection_policy::{RoundRobinPolicy, SelectionPolicy};
 use capsules_core::virtualizers::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use capsules_core::virtualizers::virtual_uart::{MuxUart, UartDevice};
 use core::mem::MaybeUninit;
@@ -70,38 +70,37 @@ macro_rules! uart_mux_component_static {
     // By default, if no selection policy is provided we will use the `InsertionFirstPolicy`.
     // This option has been chosen as the default to maintain backwards compatibility.
     () => {{
-        use capsules_core::virtualizers::selection_policy::InsertionFirstPolicy;
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
         $crate::uart_mux_component_static!(
             capsules_core::virtualizers::virtual_uart::RX_BUF_LEN,
-            InsertionFirstPolicy
+            RoundRobinPolicy
         )
     }};
     ($rx_buffer_len: literal) => {{
-        use capsules_core::virtualizers::selection_policy::InsertionFirstPolicy;
-        $crate::uart_mux_component_static!($rx_buffer_len, InsertionFirstPolicy)
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::uart_mux_component_static!($rx_buffer_len, RoundRobinPolicy)
     }};
 }
 
 pub struct UartMuxComponent<
     const RX_BUF_LEN: usize,
-    P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static = InsertionFirstPolicy,
+    P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static,
 > {
     uart: &'static dyn uart::Uart<'static>,
     baud_rate: u32,
     selection_policy: P,
 }
 
-// Implemented for backward compatibility
-impl<const RX_BUF_LEN: usize> UartMuxComponent<RX_BUF_LEN, InsertionFirstPolicy> {
-    /// Create a new MuxComponent with the [`InsertionFirstPolicy`] selection policy.
+impl<const RX_BUF_LEN: usize> UartMuxComponent<RX_BUF_LEN, RoundRobinPolicy> {
+    /// Create a new MuxComponent with the [`RoundRobinPolicy`] selection policy.
     pub fn new(
         uart: &'static dyn uart::Uart<'static>,
         baud_rate: u32,
-    ) -> UartMuxComponent<RX_BUF_LEN, InsertionFirstPolicy> {
+    ) -> UartMuxComponent<RX_BUF_LEN, RoundRobinPolicy> {
         UartMuxComponent {
             uart,
             baud_rate,
-            selection_policy: InsertionFirstPolicy,
+            selection_policy: RoundRobinPolicy::default(),
         }
     }
 }
@@ -115,7 +114,7 @@ impl<const RX_BUF_LEN: usize, P: SelectionPolicy<&'static UartDevice<'static, P>
     /// from the list of devices in the virtualizer.
     ///
     /// For the default implementation, please refer to `new` function
-    /// which uses `InsertionFirstPolicy` selection polity.
+    /// which uses `RoundRobinPolicy` selection polity.
     pub fn new_with_policy(
         uart: &'static dyn uart::Uart<'static>,
         baud_rate: u32,
@@ -174,15 +173,15 @@ macro_rules! console_component_static {
         $crate::console_component_static!($rx_buffer_len, $tx_buffer_len, $P);
     };
     ($rx_buffer_len: literal, $tx_buffer_len: literal) => {{
-        use capsules_core::virtualizers::selection_policy::InsertionFirstPolicy;
-        $crate::console_component_static!($rx_buffer_len, $tx_buffer_len, InsertionFirstPolicy)
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::console_component_static!($rx_buffer_len, $tx_buffer_len, RoundRobinPolicy)
     }};
     ($P: ty) => {
         $crate::console_component_static!(DEFAULT_BUF_SIZE, DEFAULT_BUF_SIZE, $P);
     };
     () => {{
-        use capsules_core::virtualizers::selection_policy::InsertionFirstPolicy;
-        $crate::console_component_static!(DEFAULT_BUF_SIZE, DEFAULT_BUF_SIZE, InsertionFirstPolicy)
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::console_component_static!(DEFAULT_BUF_SIZE, DEFAULT_BUF_SIZE, RoundRobinPolicy)
     }};
 }
 
@@ -254,10 +253,12 @@ impl<
 #[macro_export]
 macro_rules! console_ordered_component_static {
     ($A:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
         let mux_alarm = kernel::static_buf!(VirtualMuxAlarm<'static, $A>);
         let read_buf = static_buf!([u8; capsules_core::console::DEFAULT_BUF_SIZE]);
-        let console_uart =
-            kernel::static_buf!(capsules_core::virtualizers::virtual_uart::UartDevice);
+        let console_uart = kernel::static_buf!(
+            capsules_core::virtualizers::virtual_uart::UartDevice<'static, RoundRobinPolicy>
+        );
         let console = kernel::static_buf!(ConsoleOrdered<'static, VirtualMuxAlarm<'static, $A>>);
         (mux_alarm, read_buf, console_uart, console)
     };};

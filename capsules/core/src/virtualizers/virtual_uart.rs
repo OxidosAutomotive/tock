@@ -54,11 +54,11 @@ use kernel::hil::uart;
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::ErrorCode;
 
-use crate::virtualizers::selection_policy::{InsertionFirstPolicy, SelectionPolicy};
+use crate::virtualizers::selection_policy::{RoundRobinPolicy, SelectionPolicy};
 
 pub const RX_BUF_LEN: usize = 64;
 
-pub struct MuxUart<'a, P: SelectionPolicy<&'a UartDevice<'a, P>> = InsertionFirstPolicy> {
+pub struct MuxUart<'a, P: SelectionPolicy<&'a UartDevice<'a, P>> = RoundRobinPolicy> {
     uart: &'a dyn uart::Uart<'a>,
     speed: u32,
     devices: List<'a, UartDevice<'a, P>>,
@@ -219,7 +219,7 @@ impl<'a, P: SelectionPolicy<&'a UartDevice<'a, P>>> MuxUart<'a, P> {
         uart: &'a dyn uart::Uart<'a>,
         buffer: &'static mut [u8],
         speed: u32,
-    ) -> MuxUart<'a, InsertionFirstPolicy> {
+    ) -> MuxUart<'a, RoundRobinPolicy> {
         MuxUart {
             uart,
             speed,
@@ -228,7 +228,7 @@ impl<'a, P: SelectionPolicy<&'a UartDevice<'a, P>>> MuxUart<'a, P> {
             buffer: TakeCell::new(buffer),
             completing_read: Cell::new(false),
             deferred_call: DeferredCall::new(),
-            selection_policy: InsertionFirstPolicy,
+            selection_policy: RoundRobinPolicy::default(),
         }
     }
 
@@ -237,7 +237,7 @@ impl<'a, P: SelectionPolicy<&'a UartDevice<'a, P>>> MuxUart<'a, P> {
     /// from the list of devices in the virtualizer.
     ///
     /// For the default implementation, please refer to [`MuxUart::new`] function
-    /// which uses [`InsertionFirstPolicy`] selection policy.
+    /// which uses [`RoundRobinPolicy`] selection policy.
     pub fn new_with_policy(
         uart: &'a dyn uart::Uart<'a>,
         buffer: &'static mut [u8],
@@ -375,7 +375,7 @@ enum UartDeviceReceiveState {
     Aborting,
 }
 
-pub struct UartDevice<'a, P: SelectionPolicy<&'a Self> = InsertionFirstPolicy> {
+pub struct UartDevice<'a, P: SelectionPolicy<&'a Self> = RoundRobinPolicy> {
     state: Cell<UartDeviceReceiveState>,
     mux: &'a MuxUart<'a, P>,
     receiver: bool, // Whether or not to pass this UartDevice incoming messages.

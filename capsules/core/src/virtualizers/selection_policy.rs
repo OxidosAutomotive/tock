@@ -15,18 +15,6 @@ pub trait SelectionPolicy<I> {
         It: Iterator<Item = I> + Clone;
 }
 
-/// Default policy which selects the first ready device starting from the beginning of the list.
-pub struct InsertionFirstPolicy;
-
-impl<I> SelectionPolicy<I> for InsertionFirstPolicy {
-    fn select<It>(&self, mut it: It, ready: impl Fn(&I) -> bool) -> Option<I>
-    where
-        It: Iterator<Item = I>,
-    {
-        it.find(|node| ready(node))
-    }
-}
-
 /// Round Robin policy which selects the first ready device based on the last access position.
 /// It stores the position of the last selected device to introduce fairness.
 pub struct RoundRobinPolicy {
