@@ -3,6 +3,7 @@ use core::ops::Index;
 
 use crate::dma::{ChannelId, Dma};
 
+use cortexm33::dma_fence::CortexMDmaFence;
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
 use kernel::hil::digest::{
     Bit16Data, Bit1Data, Bit32Data, Bit8Data, Client, Digest, DigestData, DigestHash, DigestVerify,
@@ -323,15 +324,14 @@ impl Hash<'_> {
                 dma.clear_interrupt(ch);
             }
         });
-        self.registers.cr3.modify(CR3::DMAT::CLEAR);
-        if let Some(dma_slice) = self.tx_dma_buf.take() {
+        // self.regs.self.registers.cr3.modify(CR3::DMAT::CLEAR);
+        if let Some(dma_slice) = self.dma_buffer.take() {
             let fence = unsafe { CortexMDmaFence::new() };
             let mut subslice = unsafe { dma_slice.take(fence) };
             subslice.reset();
             let buf = subslice.take();
-            let len = self.tx_len.get();
-            self.tx_client.map(move |client| {
-                client.transmitted_buffer(buf, len, Ok(()));
+            self.client.map(|client| {
+                let data = self.data.take();
             });
         }
     }
@@ -641,13 +641,24 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
         if self.mode.get().is_none() {
             return Err((ErrorCode::INVAL, data));
         }
+        debug!("SHA: Entered SHA data adder");
+        if data.len() > self.regs.sr.read(SR::NBWE) as usize
+            || (self.hmac_key_len.get() > self.regs.sr.read(SR::NBWE) as usize
+                && self.hmac_key_len.get() > self.hmac_key_index.get())
+        {
+            self.regs.imr.modify(IMR::DINIE::SET);
+        }
 
-        // In order to differentiate between simple data addition and HMAC data addition
-        // we need to use key data.
         self.data.set(Some(SubSliceMutImmut::Immutable(data)));
 
+        debug!(
+            "HMAC-SHA: key_len {}, index {}",
+            self.hmac_key_len.get(),
+            self.hmac_key_index.get()
+        );
         // If we have key and it is not loaded yet, do load it now
-        if self.hmac_key.is_some() && self.hmac_key_len.get() >= self.hmac_key_index.get() {
+        if self.hmac_key.is_some() && self.hmac_key_len.get() > self.hmac_key_index.get() {
+            debug!("HMAC-SHA: We need to load a key");
             self.load_key(true);
         } else {
             self.state.set(Some(State::Add));
@@ -661,6 +672,15 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
                 self.deferred_call.set();
             }
         }
+
+        // let ret = self.data_progress();
+
+        // // debug!("SHA: Data processed");
+
+        // if !ret {
+        //     debug!("SHA: No more data to add");
+        //     self.deferred_call.set();
+        // }
 
         Ok(())
     }
