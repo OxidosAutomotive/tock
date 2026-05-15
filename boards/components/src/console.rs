@@ -180,6 +180,17 @@ macro_rules! console_component_static {
     ($rx_buffer_len: literal, $tx_buffer_len: literal, $P: ty) => {
         $crate::console_component_static!($rx_buffer_len, $tx_buffer_len, $P);
     };
+    ($rx_buffer_len: literal, $tx_buffer_len: literal) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::console_component_static!($rx_buffer_len, $tx_buffer_len, RoundRobinPolicy)
+    }};
+    ($P: ty) => {
+        $crate::console_component_static!(DEFAULT_BUF_SIZE, DEFAULT_BUF_SIZE, $P);
+    };
+    () => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::console_component_static!(DEFAULT_BUF_SIZE, DEFAULT_BUF_SIZE, RoundRobinPolicy)
+    }};
 }
 
 pub struct ConsoleComponent<
@@ -250,10 +261,12 @@ impl<
 #[macro_export]
 macro_rules! console_ordered_component_static {
     ($A:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
         let mux_alarm = kernel::static_buf!(VirtualMuxAlarm<'static, $A>);
         let read_buf = static_buf!([u8; capsules_core::console::DEFAULT_BUF_SIZE]);
-        let console_uart =
-            kernel::static_buf!(capsules_core::virtualizers::virtual_uart::UartDevice);
+        let console_uart = kernel::static_buf!(
+            capsules_core::virtualizers::virtual_uart::UartDevice<'static, RoundRobinPolicy>
+        );
         let console = kernel::static_buf!(ConsoleOrdered<'static, VirtualMuxAlarm<'static, $A>>);
         (mux_alarm, read_buf, console_uart, console)
     };};

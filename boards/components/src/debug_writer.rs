@@ -69,7 +69,8 @@ macro_rules! debug_writer_component_static {
         $crate::debug_writer_component_static!($crate::debug_writer::DEFAULT_DEBUG_BUFFER_KBYTE)
     };};
     ($BUF_SIZE_KB:expr, $P: ty) => {{
-        let uart = kernel::static_buf!(capsules_core::virtualizers::virtual_uart::UartDevice<$P>);
+        let uart =
+            kernel::static_buf!(capsules_core::virtualizers::virtual_uart::UartDevice<'static, $P>);
         let ring = kernel::static_buf!(kernel::collections::ring_buffer::RingBuffer<'static, u8>);
         let buffer = kernel::static_buf!([u8; 1024 * $BUF_SIZE_KB]);
         let debug =
@@ -77,7 +78,7 @@ macro_rules! debug_writer_component_static {
 
         (uart, ring, buffer, debug)
     };};
-    ($P: ty) => {{
+    (policy: $P: ty) => {{
         $crate::debug_writer_component_static!($crate::debug_writer::DEFAULT_DEBUG_BUFFER_KBYTE, $P)
     };};
 }
