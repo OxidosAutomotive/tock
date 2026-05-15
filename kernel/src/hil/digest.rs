@@ -309,6 +309,27 @@ pub trait Sha512 {
     fn set_mode_sha512(&self) -> Result<(), ErrorCode>;
 }
 
+pub trait HmacMd5 {
+    /// Call before adding data to perform HMACMd5
+    ///
+    /// The key used for the HMAC is passed to this function.
+    fn set_mode_hmacmd5(&self, key: &[u8]) -> Result<(), ErrorCode>;
+}
+
+pub trait HmacSha1 {
+    /// Call before adding data to perform HMACSha1
+    ///
+    /// The key used for the HMAC is passed to this function.
+    fn set_mode_hmacsha1(&self, key: &[u8]) -> Result<(), ErrorCode>;
+}
+
+pub trait HmacSha224 {
+    /// Call before adding data to perform HMACSha224
+    ///
+    /// The key used for the HMAC is passed to this function.
+    fn set_mode_hmacsha224(&self, key: &[u8]) -> Result<(), ErrorCode>;
+}
+
 pub trait HmacSha256 {
     /// Call before adding data to perform HMACSha256
     ///

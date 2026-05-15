@@ -17,10 +17,14 @@ const USART1_RDR: u32 = USART1_BASE_ADDR + 0x24;
 /// USART1 Transmit Data Register (TDR) address.
 const USART1_TDR: u32 = USART1_BASE_ADDR + 0x28;
 
+const HASH_BASE_ADDR: u32 = 0x520c0400;
+const HASH_DIN: u32 = HASH_BASE_ADDR + 0x04;
+
 /// GPDMA Request Selection IDs (REQSEL)
 /// Found in the GPDMA request multiplexer table of the STM32U5 reference manual.
 const GPDMA_REQ_USART1_RX: u32 = 24;
 const GPDMA_REQ_USART1_TX: u32 = 25;
+const GPDMA_REQ_HASH_IN: u32 = 89;
 
 register_bitfields! [
     u32,
@@ -205,6 +209,7 @@ pub enum DmaDirection {
 pub enum DmaPeripheral {
     Usart1Tx,
     Usart1Rx,
+    Hash,
 }
 
 impl DmaPeripheral {
@@ -219,6 +224,11 @@ impl DmaPeripheral {
                 USART1_RDR,
                 GPDMA_REQ_USART1_RX,
                 DmaDirection::PeripheralToMemory,
+            ),
+            DmaPeripheral::Hash => (
+                HASH_DIN,
+                GPDMA_REQ_HASH_IN,
+                DmaDirection::MemoryToPeripheral,
             ),
         }
     }

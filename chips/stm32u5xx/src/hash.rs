@@ -1,12 +1,16 @@
 use core::cell::Cell;
 use core::ops::Index;
 
+use crate::dma::{ChannelId, Dma};
+
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
 use kernel::hil::digest::{
     Bit16Data, Bit1Data, Bit32Data, Bit8Data, Client, Digest, DigestData, DigestHash, DigestVerify,
-    HmacSha256, HmacSha384, HmacSha512, Md5, Sha1, Sha224, Sha256, Sha384, Sha512,
+    HmacMd5, HmacSha1, HmacSha224, HmacSha256, HmacSha384, HmacSha512, Md5, Sha1, Sha224, Sha256,
+    Sha384, Sha512,
 };
 use kernel::utilities::cells::{MapCell, OptionalCell};
+use kernel::utilities::dma_slice::DmaSubSliceMut;
 use kernel::utilities::leasable_buffer::SubSliceMutImmut;
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::utilities::registers::{
@@ -175,8 +179,9 @@ enum State {
 
 pub struct Hash<'a> {
     regs: StaticRef<HashRegisters>,
-    // dma: OptionalCell<&'a Dma>,
-    // dma_channel: Cell<usize>,
+    dma: OptionalCell<&'a Dma>,
+    dma_channel: Cell<Option<ChannelId>>,
+    dma_buffer: MapCell<DmaSubSliceMut<'static, u32>>,
     mode: Cell<Option<Mode>>,
     state: Cell<Option<State>>,
     hmac_key: MapCell<[u8; MAX_HMAC_KEY_SIZE]>,
@@ -192,12 +197,22 @@ pub struct Hash<'a> {
     deferred_call: DeferredCall,
 }
 
+impl<'a> Hash<'a> {
+    // Associates a DMA controller and channels with the USART driver.
+    pub fn set_dma(hash: &'static Self, dma: &'a Dma, channel: ChannelId) {
+        hash.dma.set(dma);
+        hash.dma_channel.set(Some(channel));
+        dma.set_client(channel, hash);
+    }
+}
+
 impl Hash<'_> {
     pub fn new(base: StaticRef<HashRegisters>) -> Self {
         Self {
             regs: base,
-            // dma: OptionalCell::empty(),
-            // dma_channel: Cell::new(0),
+            dma: OptionalCell::empty(),
+            dma_channel: Cell::new(None),
+            dma_buffer: MapCell::empty(),
             mode: Cell::new(None),
             state: Cell::new(None),
             data: Cell::new(None),
@@ -299,6 +314,25 @@ impl Hash<'_> {
             // }
 
             // if false, we are done
+        }
+    }
+
+    pub fn handle_dma_interrupt(&self) {
+        self.dma.map(|dma| {
+            if let Some(ch) = self.dma_channel.get() {
+                dma.clear_interrupt(ch);
+            }
+        });
+        self.registers.cr3.modify(CR3::DMAT::CLEAR);
+        if let Some(dma_slice) = self.tx_dma_buf.take() {
+            let fence = unsafe { CortexMDmaFence::new() };
+            let mut subslice = unsafe { dma_slice.take(fence) };
+            subslice.reset();
+            let buf = subslice.take();
+            let len = self.tx_len.get();
+            self.tx_client.map(move |client| {
+                client.transmitted_buffer(buf, len, Ok(()));
+            });
         }
     }
 
@@ -575,6 +609,17 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
     }
 }
 
+impl crate::dma::DmaClient for Hash<'_> {
+    fn transfer_done(&self, channel: ChannelId) {
+        if let Some(ch) = self.dma_channel.get() {
+            if ch == channel {
+                self.handle_dma_interrupt();
+                return;
+            }
+        }
+    }
+}
+
 impl<'a> DigestData<'a, 32> for Hash<'a> {
     fn set_data_client(&'a self, _client: &'a dyn kernel::hil::digest::ClientData<32>) {
         unimplemented!();
@@ -815,6 +860,132 @@ impl Sha512 for Hash<'_> {
     }
 }
 
+impl HmacMd5 for Hash<'_> {
+    fn set_mode_hmacmd5(&self, key: &[u8]) -> Result<(), ErrorCode> {
+        if self.state.get().is_some() {
+            return Err(ErrorCode::BUSY);
+        }
+        self.mode.set(Some(Mode::MD5));
+        debug!("Set mode: Key length: {}", key.len());
+        self.hmac_key
+            .map(|buf| {
+                debug!("Set mode: Buf length: {}", buf.len());
+                if buf.len() >= key.len() {
+                    buf[..key.len()].copy_from_slice(key);
+                    self.hmac_key_len.set(key.len());
+                    Ok(())
+                } else {
+                    Err(ErrorCode::SIZE)
+                }
+            })
+            .transpose()?;
+        self.regs
+            .cr
+            .modify(CR::ALGO::MD5 + CR::DATATYPE::_8bitData + CR::MODE::SET);
+        if key.len() > (HASH_FIFO_SIZE - 1) * 4 {
+            self.regs.cr.modify(CR::LKEY::SET + CR::INIT::SET);
+        } else {
+            self.regs.cr.modify(CR::LKEY::CLEAR + CR::INIT::SET);
+        }
+
+        // now it's time to fill the buffer in
+
+        // self.hmac_key.set(key);
+        // we need to store this key throughout the whole operation
+        // and then load it to data subslice and process it as usually
+        //
+        // The problem is how to store a reference with anonymous lifetime.
+        //
+        // self.regs.cr.modify(CR::INIT::SET);
+        //
+        Ok(())
+    }
+}
+
+impl HmacSha1 for Hash<'_> {
+    fn set_mode_hmacsha1(&self, key: &[u8]) -> Result<(), ErrorCode> {
+        if self.state.get().is_some() {
+            return Err(ErrorCode::BUSY);
+        }
+        self.mode.set(Some(Mode::SHA1));
+        debug!("Set mode: Key length: {}", key.len());
+        self.hmac_key
+            .map(|buf| {
+                debug!("Set mode: Buf length: {}", buf.len());
+                if buf.len() >= key.len() {
+                    buf[..key.len()].copy_from_slice(key);
+                    self.hmac_key_len.set(key.len());
+                    Ok(())
+                } else {
+                    Err(ErrorCode::SIZE)
+                }
+            })
+            .transpose()?;
+        self.regs
+            .cr
+            .modify(CR::ALGO::SHA_1 + CR::DATATYPE::_8bitData + CR::MODE::SET);
+        if key.len() > (HASH_FIFO_SIZE - 1) * 4 {
+            self.regs.cr.modify(CR::LKEY::SET + CR::INIT::SET);
+        } else {
+            self.regs.cr.modify(CR::LKEY::CLEAR + CR::INIT::SET);
+        }
+
+        // now it's time to fill the buffer in
+
+        // self.hmac_key.set(key);
+        // we need to store this key throughout the whole operation
+        // and then load it to data subslice and process it as usually
+        //
+        // The problem is how to store a reference with anonymous lifetime.
+        //
+        // self.regs.cr.modify(CR::INIT::SET);
+        //
+        Ok(())
+    }
+}
+
+impl HmacSha224 for Hash<'_> {
+    fn set_mode_hmacsha224(&self, key: &[u8]) -> Result<(), ErrorCode> {
+        if self.state.get().is_some() {
+            return Err(ErrorCode::BUSY);
+        }
+        self.mode.set(Some(Mode::SHA2_224));
+        debug!("Set mode: Key length: {}", key.len());
+        self.hmac_key
+            .map(|buf| {
+                debug!("Set mode: Buf length: {}", buf.len());
+                if buf.len() >= key.len() {
+                    buf[..key.len()].copy_from_slice(key);
+                    self.hmac_key_len.set(key.len());
+                    Ok(())
+                } else {
+                    Err(ErrorCode::SIZE)
+                }
+            })
+            .transpose()?;
+        self.regs
+            .cr
+            .modify(CR::ALGO::SHA2_224 + CR::DATATYPE::_8bitData + CR::MODE::SET);
+        if key.len() > (HASH_FIFO_SIZE - 1) * 4 {
+            self.regs.cr.modify(CR::LKEY::SET + CR::INIT::SET);
+        } else {
+            self.regs.cr.modify(CR::LKEY::CLEAR + CR::INIT::SET);
+        }
+
+        // now it's time to fill the buffer in
+
+        // self.hmac_key.set(key);
+        // we need to store this key throughout the whole operation
+        // and then load it to data subslice and process it as usually
+        //
+        // The problem is how to store a reference with anonymous lifetime.
+        //
+        // self.regs.cr.modify(CR::INIT::SET);
+        //
+        Ok(())
+    }
+}
+
 impl HmacSha384 for Hash<'_> {
     fn set_mode_hmacsha384(&self, _key: &[u8]) -> Result<(), kernel::ErrorCode> {
         Err(kernel::ErrorCode::NOSUPPORT)
@@ -872,8 +1043,4 @@ impl DeferredCallClient for Hash<'_> {
     fn register(&'static self) {
         self.deferred_call.register(self);
     }
-}
-
-pub unsafe fn init() -> &'static Hash<'static> {
-    kernel::static_init!(Hash, Hash::new(HASH_BASE))
 }
