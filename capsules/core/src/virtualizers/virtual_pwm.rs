@@ -29,18 +29,24 @@ use kernel::hil;
 use kernel::utilities::cells::OptionalCell;
 use kernel::ErrorCode;
 
-pub struct MuxPwm<'a, P: hil::pwm::Pwm> {
+use crate::virtualizers::selection_policy::{RoundRobinPolicy, SelectionPolicy};
+
+pub struct MuxPwm<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>> {
     pwm: &'a P,
-    devices: List<'a, PwmPinUser<'a, P>>,
-    inflight: OptionalCell<&'a PwmPinUser<'a, P>>,
+    devices: List<'a, PwmPinUser<'a, P, SP>>,
+    inflight: OptionalCell<&'a PwmPinUser<'a, P, SP>>,
+    selection_policy: SP,
 }
 
-impl<'a, P: hil::pwm::Pwm> MuxPwm<'a, P> {
-    pub const fn new(pwm: &'a P) -> MuxPwm<'a, P> {
+impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>> MuxPwm<'a, P, SP> {
+    // NOTE(frihetselsker): can we remove const?
+    // pub const fn new(pwm: &'a P) -> MuxPwm<'a, P, RoundRobinPolicy> {
+    pub fn new(pwm: &'a P) -> MuxPwm<'a, P, RoundRobinPolicy> {
         MuxPwm {
             pwm,
             devices: List::new(),
             inflight: OptionalCell::empty(),
+            selection_policy: RoundRobinPolicy::default(),
         }
     }
 
@@ -48,7 +54,9 @@ impl<'a, P: hil::pwm::Pwm> MuxPwm<'a, P> {
     /// one with an outstanding operation and run that.
     fn do_next_op(&self) {
         if self.inflight.is_none() {
-            let mnode = self.devices.iter().find(|node| node.operation.is_some());
+            let mnode = self
+                .selection_policy
+                .select(self.devices.iter(), |node| node.operation.is_some());
             mnode.map(|node| {
                 let started = node.operation.take().is_some_and(|operation| {
                     match operation {
@@ -108,15 +116,19 @@ enum Operation {
     Stop,
 }
 
-pub struct PwmPinUser<'a, P: hil::pwm::Pwm> {
-    mux: &'a MuxPwm<'a, P>,
+pub struct PwmPinUser<
+    'a,
+    P: hil::pwm::Pwm,
+    SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>> = RoundRobinPolicy,
+> {
+    mux: &'a MuxPwm<'a, P, SP>,
     pin: P::Pin,
     operation: OptionalCell<Operation>,
-    next: ListLink<'a, PwmPinUser<'a, P>>,
+    next: ListLink<'a, PwmPinUser<'a, P, SP>>,
 }
 
-impl<'a, P: hil::pwm::Pwm> PwmPinUser<'a, P> {
-    pub const fn new(mux: &'a MuxPwm<'a, P>, pin: P::Pin) -> PwmPinUser<'a, P> {
+impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>> PwmPinUser<'a, P, SP> {
+    pub const fn new(mux: &'a MuxPwm<'a, P, SP>, pin: P::Pin) -> PwmPinUser<'a, P, SP> {
         PwmPinUser {
             mux,
             pin,
@@ -130,13 +142,17 @@ impl<'a, P: hil::pwm::Pwm> PwmPinUser<'a, P> {
     }
 }
 
-impl<'a, P: hil::pwm::Pwm> ListNode<'a, PwmPinUser<'a, P>> for PwmPinUser<'a, P> {
-    fn next(&'a self) -> &'a ListLink<'a, PwmPinUser<'a, P>> {
+impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>>
+    ListNode<'a, PwmPinUser<'a, P, SP>> for PwmPinUser<'a, P, SP>
+{
+    fn next(&'a self) -> &'a ListLink<'a, PwmPinUser<'a, P, SP>> {
         &self.next
     }
 }
 
-impl<P: hil::pwm::Pwm> hil::pwm::PwmPin for PwmPinUser<'_, P> {
+impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>> hil::pwm::PwmPin
+    for PwmPinUser<'a, P, SP>
+{
     fn start(&self, frequency_hz: usize, duty_cycle: usize) -> Result<(), ErrorCode> {
         self.operation.set(Operation::Simple {
             frequency_hz,
