@@ -40,6 +40,15 @@ impl<'a, P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>>> MuxRngMaster<'a,
         }
     }
 
+    pub fn new_with_policy(rng: &'a dyn Rng<'a>, selection_policy: P) -> MuxRngMaster<'a, P> {
+        MuxRngMaster {
+            rng,
+            devices: List::new(),
+            inflight: OptionalCell::empty(),
+            selection_policy,
+        }
+    }
+
     fn do_next_op(&self) -> Result<(), ErrorCode> {
         if self.inflight.is_none() {
             let mnode = self

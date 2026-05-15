@@ -50,6 +50,15 @@ impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>> MuxPw
         }
     }
 
+    pub fn new_with_policy(pwm: &'a P, selection_policy: SP) -> MuxPwm<'a, P, SP> {
+        MuxPwm {
+            pwm,
+            devices: List::new(),
+            inflight: OptionalCell::empty(),
+            selection_policy,
+        }
+    }
+
     /// If we are not currently doing anything, scan the list of devices for
     /// one with an outstanding operation and run that.
     fn do_next_op(&self) {

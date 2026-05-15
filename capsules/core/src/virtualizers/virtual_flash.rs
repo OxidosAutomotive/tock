@@ -101,6 +101,15 @@ impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> MuxF
         }
     }
 
+    pub fn new_with_policy(flash: &'a F, selection_policy: P) -> MuxFlash<'a, F, P> {
+        MuxFlash {
+            flash,
+            users: List::new(),
+            inflight: OptionalCell::empty(),
+            selection_policy,
+        }
+    }
+
     /// Scan the list of users and find the first user that has a pending
     /// request, then issue that request to the flash hardware.
     fn do_next_op(&self) {
