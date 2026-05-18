@@ -719,7 +719,6 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             // DMA transfer can send only 32-bit words
             // I need to handle leftovers here and if a complete word is set, then it should be added on top of them
             let mut buf_leftover_number = data.as_slice().len() % 4;
-            let data_slice = data.take();
             // If there are leftovers, firstly, we add as much as possible to the current leftovers,
             // when we reach the complete word, we need to append on top of the current of slice
             // NOTE: use iter() and chain()
