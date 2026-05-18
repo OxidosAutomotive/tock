@@ -294,6 +294,8 @@ impl Dma {
         let channel_id: usize = channel.into();
         let (periph_addr, reqsel, direction) = peripheral.get_params();
 
+        //TODO(frihetselsker): Add size handling
+
         // 1. Mark channel as Secure AND Privileged
         self.registers.seccfgr.modify(CH_FIELDS[channel_id].val(1));
         self.registers.privcfgr.modify(CH_FIELDS[channel_id].val(1));
@@ -320,7 +322,9 @@ impl Dma {
                 ch.t_r1.write(
                     DmaChannelTR1::SINC::SET
                         + DmaChannelTR1::SAP::CLEAR
-                        + DmaChannelTR1::DAP::CLEAR,
+                        + DmaChannelTR1::DAP::CLEAR
+                        + DmaChannelTR1::SSEC::SET
+                        + DmaChannelTR1::DSEC::SET,
                 );
                 // Source request comes from destination peripheral
                 ch.t_r2

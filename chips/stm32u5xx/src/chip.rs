@@ -75,8 +75,15 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
         let usart1_channel_tx = self.dma1.request_channel();
         let usart1_channel_rx = self.dma1.request_channel();
 
+        // Link DMA to HASH
+        let hash_channel = self.dma1.request_channel();
+
         if let (Some(tx), Some(rx)) = (usart1_channel_tx, usart1_channel_rx) {
             usart::Usart::set_dma(self.usart1, self.dma1, tx, rx);
+        }
+
+        if let Some(tx) = hash_channel {
+            hash::Hash::set_dma(self.hash, self.dma1, tx);
         }
     }
 }

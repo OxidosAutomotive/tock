@@ -12,7 +12,7 @@ use kernel::hil::digest::{
 };
 use kernel::utilities::cells::{MapCell, OptionalCell};
 use kernel::utilities::dma_slice::DmaSubSliceMut;
-use kernel::utilities::leasable_buffer::SubSliceMutImmut;
+use kernel::utilities::leasable_buffer::{SubSliceMut, SubSliceMutImmut};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::utilities::registers::{
     register_bitfields, register_structs, ReadOnly, ReadWrite, WriteOnly,
@@ -324,15 +324,26 @@ impl Hash<'_> {
                 dma.clear_interrupt(ch);
             }
         });
-        // self.regs.self.registers.cr3.modify(CR3::DMAT::CLEAR);
+        // Disable the DMA trigger to release the channel
+        self.regs.cr.modify(CR::DMAE::CLEAR);
         if let Some(dma_slice) = self.dma_buffer.take() {
             let fence = unsafe { CortexMDmaFence::new() };
             let mut subslice = unsafe { dma_slice.take(fence) };
             subslice.reset();
-            let buf = subslice.take();
-            self.client.map(|client| {
-                let data = self.data.take();
-            });
+            // let buf = subslice.take();
+            // self.client.map(|client| {
+            //     let buf = self.data.take();
+            //     if let Some(data) = buf {
+            //         match buf {
+            //             Some(SubSliceMutImmut::Immutable(mut b)) => {
+            //                 client.add_data_done(Ok(()), b);
+            //             }
+            //             SubSliceMutImmut::Mutable(mut b) => {
+            //                 client.add_mut_data_done(Ok(()), b);
+            //             }
+            //         }
+            //     }
+            // });
         }
     }
 
@@ -702,47 +713,116 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             return Err((ErrorCode::INVAL, data));
         }
         debug!("SHA: Entered SHA data adder");
-        if data.len() > self.regs.sr.read(SR::NBWE) as usize
-            || (self.hmac_key_len.get() > self.regs.sr.read(SR::NBWE) as usize
-                && self.hmac_key_len.get() > self.hmac_key_index.get())
-        {
-            self.regs.imr.modify(IMR::DINIE::SET);
-        }
 
-        self.data.set(Some(SubSliceMutImmut::Mutable(data)));
-
-        debug!(
-            "HMAC-SHA: key_len {}, index {}",
-            self.hmac_key_len.get(),
-            self.hmac_key_index.get()
-        );
-        // If we have key and it is not loaded yet, do load it now
-        if self.hmac_key.is_some() && self.hmac_key_len.get() > self.hmac_key_index.get() {
-            debug!("HMAC-SHA: We need to load a key");
-            self.load_key(true);
-        } else {
-            self.state.set(Some(State::Add));
-            // Otherwise, act as usual
-            let ret = self.data_progress();
-            // Why do I need this variable here?
-            if ret {
-                self.regs.imr.modify(IMR::DINIE::SET);
-            } else {
-                debug!("SHA: No more data to add");
-                self.deferred_call.set();
+        if let Some(dma) = self.dma.get() {
+            // Move buffer to DMA buffer
+            // DMA transfer can send only 32-bit words
+            // I need to handle leftovers here and if a complete word is set, then it should be added on top of them
+            let mut buf_leftover_number = data.as_slice().len() % 4;
+            let data_slice = data.take();
+            // If there are leftovers, firstly, we add as much as possible to the current leftovers,
+            // when we reach the complete word, we need to append on top of the current of slice
+            // NOTE: use iter() and chain()
+            // If we still have leftovers, take bytes from the end and put them to the leftover buffer
+            //
+            if buf_leftover_number != 0 {
+                // Firstly, we check if we can fill it with previous leftovers
+                if self.leftover_index.get() > 0 {
+                    // We need to append data
+                    // CHeck if we can append it
+                    let fixed_buffer_leftover_number = buf_leftover_number;
+                    for idx in 0..fixed_buffer_leftover_number {
+                        self.leftover_buffer
+                            .update(|buf| buf >> 8 | (data_slice[idx] as u32).rotate_right(8));
+                        debug!(
+                            "SHA: leftover right now: 0x{:02x}",
+                            self.leftover_buffer.get()
+                        );
+                        self.leftover_index.update(|index| (index + 1) % 4);
+                        buf_leftover_number -= 1;
+                        if self.leftover_index.get() == 0 {
+                            // It is safe because u32::default() = 0
+                            let new_word = self.leftover_buffer.take();
+                            let new_data_slice = new_word.to_le_bytes().iter().chain(data_slice);
+                            data.take();
+                        }
+                    }
+                }
             }
+
+            // Hardware fence
+            let fence = unsafe { CortexMDmaFence::new() };
+            // Convert subslice into DmaSlice
+            let dma_slice = DmaSubSliceMut::new_static(data, fence);
+
+            // Extract the physical pointer and length for MMIO
+            let ptr = dma_slice.as_mut_ptr() as u32;
+            let len = dma_slice.len() as u32;
+
+            // Save DmaSlice in the struct
+            self.dma_buffer.replace(data);
+            replace(dma_slice);
+            self.tx_len.set(tx_len);
+
+            // Trigger USART
+            if let Some(ch) = self.dma_channel_tx.get() {
+                dma.setup(ch, DmaPeripheral::Usart1Tx, ptr, len);
+                self.registers.cr3.modify(CR3::DMAT::SET);
+                Ok(())
+            } else {
+                self.tx_dma_buf
+                    .take()
+                    .map(|s| {
+                        let f = unsafe { CortexMDmaFence::new() };
+                        let mut buf = unsafe { s.take(f) };
+                        buf.reset();
+                        Err((kernel::ErrorCode::RESERVE, buf.take()))
+                    })
+                    .unwrap()
+            }
+        } else {
+            self.data.set(Some(SubSliceMutImmut::Mutable(data)));
+
+            if data.len() > self.regs.sr.read(SR::NBWE) as usize
+                || (self.hmac_key_len.get() > self.regs.sr.read(SR::NBWE) as usize
+                    && self.hmac_key_len.get() > self.hmac_key_index.get())
+            {
+                self.regs.imr.modify(IMR::DINIE::SET);
+            }
+
+            debug!(
+                "HMAC-SHA: key_len {}, index {}",
+                self.hmac_key_len.get(),
+                self.hmac_key_index.get()
+            );
+            // If we have key and it is not loaded yet, do load it now
+            if self.hmac_key.is_some() && self.hmac_key_len.get() > self.hmac_key_index.get() {
+                debug!("HMAC-SHA: We need to load a key");
+                self.load_key(true);
+            } else {
+                self.state.set(Some(State::Add));
+                // Otherwise, act as usual
+                let ret = self.data_progress();
+                // Why do I need this variable here?
+                if ret {
+                    self.regs.imr.modify(IMR::DINIE::SET);
+                } else {
+                    debug!("SHA: No more data to add");
+                    self.deferred_call.set();
+                }
+            }
+
+            // let ret = self.data_progress();
+
+            // // debug!("SHA: Data processed");
+
+            // if !ret {
+            //     debug!("SHA: No more data to add");
+            //     self.deferred_call.set();
+            // }
+
+            Ok(())
         }
-
-        // let ret = self.data_progress();
-
-        // // debug!("SHA: Data processed");
-
-        // if !ret {
-        //     debug!("SHA: No more data to add");
-        //     self.deferred_call.set();
-        // }
-
-        Ok(())
     }
 
     fn clear_data(&self) {
