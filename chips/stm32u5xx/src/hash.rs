@@ -476,6 +476,16 @@ impl Hash<'_> {
         count
     }
 
+    fn handle_leftover(&self, data: &dyn Index<usize, Output = u8>) -> usize {
+        let bytes_written = 4 - self.leftover_index.take();
+        for data_idx in 0..bytes_written {
+            self.leftover_buffer
+                .update(|buf| buf >> 8 | (data[data_idx] as u32).rotate_right(8));
+        }
+        self.regs.din.set(self.leftover_buffer.take());
+        bytes_written
+    }
+
     // Return true if processing more data, false if the buffer
     // is completely processed.
     fn data_progress(&self) -> bool {
@@ -485,6 +495,10 @@ impl Hash<'_> {
                     self.data.set(Some(SubSliceMutImmut::Immutable(b)));
                     false
                 } else {
+                    if b.len() > 3 && self.leftover_index.get() != 0 {
+                        let count = self.handle_leftover(&b);
+                        b.slice(count..);
+                    }
                     let count = self.process(&b, b.len());
                     b.slice(count..);
                     if b.len() == 0 {
@@ -502,6 +516,10 @@ impl Hash<'_> {
                     self.data.set(Some(SubSliceMutImmut::Mutable(b)));
                     false
                 } else {
+                    if b.len() > 3 && self.leftover_index.get() != 0 {
+                        let count = self.handle_leftover(&b);
+                        b.slice(count..);
+                    }
                     let count = self.process(&b, b.len());
                     b.slice(count..);
                     if b.len() == 0 {
@@ -532,7 +550,7 @@ impl Hash<'_> {
         if self.hmac_key_len.get() == self.hmac_key_index.get() {
             regs.imr.modify(IMR::DINIE::SET);
             if self.leftover_buffer.get() != 0 {
-                self.handle_leftover();
+                self.write_final_leftover();
             }
 
             self.state.update(|_| {
@@ -564,7 +582,7 @@ impl Hash<'_> {
         }
     }
 
-    fn handle_leftover(&self) {
+    fn write_final_leftover(&self) {
         let regs = self.regs;
         debug!("SHA: bits filled: {}", self.leftover_index.get() * 8);
         debug!(
@@ -599,7 +617,7 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
         // assume that we write bytes, not bit by bit
         // Do I need to create a separate function?
         if self.leftover_buffer.get() != 0 {
-            self.handle_leftover();
+            self.write_final_leftover();
         } else {
             regs.str.modify(STR::NBLW.val(0));
         }
@@ -714,40 +732,20 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
         }
         debug!("SHA: Entered SHA data adder");
 
+        // If DMA is available, then do use it.
         if let Some(dma) = self.dma.get() {
             // Move buffer to DMA buffer
             // DMA transfer can send only 32-bit words
-            // I need to handle leftovers here and if a complete word is set, then it should be added on top of them
-            let mut buf_leftover_number = data.as_slice().len() % 4;
-            // If there are leftovers, firstly, we add as much as possible to the current leftovers,
-            // when we reach the complete word, we need to append on top of the current of slice
             // NOTE: use iter() and chain()
             // If we still have leftovers, take bytes from the end and put them to the leftover buffer
+            // NEW IDEA: just append bytes on top of what you got, then take a slice which can be divided by 4, add it to the DMA buffer and pass the leftovers back
+            // The subslice has to be discarded
+            let mut buf = self.leftover_buffer.get().to_le_bytes();
+            buf.reverse();
+            let new_buf = [0u32; ]
+
+            // Turn u8 to u32
             //
-            if buf_leftover_number != 0 {
-                // Firstly, we check if we can fill it with previous leftovers
-                if self.leftover_index.get() > 0 {
-                    // We need to append data
-                    // CHeck if we can append it
-                    let fixed_buffer_leftover_number = buf_leftover_number;
-                    for idx in 0..fixed_buffer_leftover_number {
-                        self.leftover_buffer
-                            .update(|buf| buf >> 8 | (data_slice[idx] as u32).rotate_right(8));
-                        debug!(
-                            "SHA: leftover right now: 0x{:02x}",
-                            self.leftover_buffer.get()
-                        );
-                        self.leftover_index.update(|index| (index + 1) % 4);
-                        buf_leftover_number -= 1;
-                        if self.leftover_index.get() == 0 {
-                            // It is safe because u32::default() = 0
-                            let new_word = self.leftover_buffer.take();
-                            let new_data_slice = new_word.to_le_bytes().iter().chain(data_slice);
-                            data.take();
-                        }
-                    }
-                }
-            }
 
             // Hardware fence
             let fence = unsafe { CortexMDmaFence::new() };
@@ -780,6 +778,7 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
                     .unwrap()
             }
         } else {
+            // Otherwise, rely on the software loading
             self.data.set(Some(SubSliceMutImmut::Mutable(data)));
 
             if data.len() > self.regs.sr.read(SR::NBWE) as usize
