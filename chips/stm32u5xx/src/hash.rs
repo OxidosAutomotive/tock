@@ -1,7 +1,7 @@
 use core::cell::Cell;
 use core::ops::Index;
 
-use crate::dma::{ChannelId, Dma};
+use crate::dma::{ChannelId, Dma, DmaPeripheral};
 
 use cortexm33::dma_fence::CortexMDmaFence;
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
@@ -336,7 +336,7 @@ impl Hash<'_> {
                     self.client.map(|client| {
                         client.add_data_done(Ok(()), subslice);
                     });
-                },
+                }
                 DmaSubSliceMutImmut::Mutable(b) => {
                     let fence = unsafe { CortexMDmaFence::new() };
                     let mut subslice = unsafe { b.take(fence) };
@@ -743,9 +743,6 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             // If we still have leftovers, take bytes from the end and put them to the leftover buffer
             // NEW IDEA: just append bytes on top of what you got, then take a slice which can be divided by 4, add it to the DMA buffer and pass the leftovers back
             // The subslice has to be discarded
-            let mut buf = self.leftover_buffer.get().to_le_bytes();
-            buf.reverse();
-            let new_buf = [0u32; ]
 
             // Turn u8 to u32
             //
@@ -760,23 +757,25 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             let len = dma_slice.len() as u32;
 
             // Save DmaSlice in the struct
-            self.dma_buffer.replace(data);
-            replace(dma_slice);
-            self.tx_len.set(tx_len);
+            self.dma_buffer
+                .replace(DmaSubSliceMutImmut::Mutable(dma_slice));
 
             // Trigger USART
-            if let Some(ch) = self.dma_channel_tx.get() {
-                dma.setup(ch, DmaPeripheral::Usart1Tx, ptr, len);
-                self.registers.cr3.modify(CR3::DMAT::SET);
+            if let Some(ch) = self.dma_channel.get() {
+                dma.setup(ch, crate::dma::DmaPeripheral::Hash, ptr, len);
+                self.regs.cr3.modify(CR3::DMAT::SET);
                 Ok(())
             } else {
-                self.tx_dma_buf
+                self.dma_buffer
                     .take()
-                    .map(|s| {
-                        let f = unsafe { CortexMDmaFence::new() };
-                        let mut buf = unsafe { s.take(f) };
-                        buf.reset();
-                        Err((kernel::ErrorCode::RESERVE, buf.take()))
+                    .map(|s| match s {
+                        DmaSubSliceMutImmut::Immutable(b) => {}
+                        DmaSubSliceMutImmut::Mutable(b) => {
+                            let f = unsafe { CortexMDmaFence::new() };
+                            let mut buf = unsafe { b.take(f) };
+                            buf.reset();
+                            Err((kernel::ErrorCode::RESERVE, buf.take()))
+                        }
                     })
                     .unwrap()
             }
