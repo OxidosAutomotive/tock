@@ -11,7 +11,7 @@ use kernel::hil::digest::{
     Sha384, Sha512,
 };
 use kernel::utilities::cells::{MapCell, OptionalCell};
-use kernel::utilities::dma_slice::DmaSubSliceMut;
+use kernel::utilities::dma_slice::{DmaSubSliceMut, DmaSubSliceMutImmut};
 use kernel::utilities::leasable_buffer::{SubSliceMut, SubSliceMutImmut};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::utilities::registers::{
@@ -182,7 +182,7 @@ pub struct Hash<'a> {
     regs: StaticRef<HashRegisters>,
     dma: OptionalCell<&'a Dma>,
     dma_channel: Cell<Option<ChannelId>>,
-    dma_buffer: MapCell<DmaSubSliceMut<'static, u32>>,
+    dma_buffer: MapCell<DmaSubSliceMutImmut<'static, u8>>,
     mode: Cell<Option<Mode>>,
     state: Cell<Option<State>>,
     hmac_key: MapCell<[u8; MAX_HMAC_KEY_SIZE]>,
@@ -326,24 +326,26 @@ impl Hash<'_> {
         });
         // Disable the DMA trigger to release the channel
         self.regs.cr.modify(CR::DMAE::CLEAR);
+        // TODO(frihetselsker): Add states handling
         if let Some(dma_slice) = self.dma_buffer.take() {
-            let fence = unsafe { CortexMDmaFence::new() };
-            let mut subslice = unsafe { dma_slice.take(fence) };
-            subslice.reset();
-            // let buf = subslice.take();
-            // self.client.map(|client| {
-            //     let buf = self.data.take();
-            //     if let Some(data) = buf {
-            //         match buf {
-            //             Some(SubSliceMutImmut::Immutable(mut b)) => {
-            //                 client.add_data_done(Ok(()), b);
-            //             }
-            //             SubSliceMutImmut::Mutable(mut b) => {
-            //                 client.add_mut_data_done(Ok(()), b);
-            //             }
-            //         }
-            //     }
-            // });
+            match dma_slice {
+                DmaSubSliceMutImmut::Immutable(b) => {
+                    let mut subslice = b.as_sub_slice();
+                    subslice.reset();
+
+                    self.client.map(|client| {
+                        client.add_data_done(Ok(()), subslice);
+                    });
+                },
+                DmaSubSliceMutImmut::Mutable(b) => {
+                    let fence = unsafe { CortexMDmaFence::new() };
+                    let mut subslice = unsafe { b.take(fence) };
+                    subslice.reset();
+                    self.client.map(|client| {
+                        client.add_mut_data_done(Ok(()), subslice);
+                    });
+                }
+            }
         }
     }
 
@@ -495,6 +497,7 @@ impl Hash<'_> {
                     self.data.set(Some(SubSliceMutImmut::Immutable(b)));
                     false
                 } else {
+                    // NOTE(frihetselsker): Look at leasable_buffer section in the docs.
                     if b.len() > 3 && self.leftover_index.get() != 0 {
                         let count = self.handle_leftover(&b);
                         b.slice(count..);
