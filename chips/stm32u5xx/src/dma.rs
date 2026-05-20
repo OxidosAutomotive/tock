@@ -288,7 +288,7 @@ impl DmaDataWidth {
                     PaddingAlignmentMode::SignExtendedRightTruncated => {
                         DmaChannelTR1::PAM::RASE_LART
                     }
-                } + DmaChannelTR1::DDW_LOG2::HALF_WORD)
+                } + DmaChannelTR1::DDW_LOG2::WORD)
             }
         }
     }
@@ -401,8 +401,6 @@ impl Dma {
     ) {
         let channel_id: usize = channel.into();
         let (periph_addr, reqsel, direction, src_data, dest_data) = peripheral.get_params();
-
-        //TODO(frihetselsker): Add size handling
 
         // 1. Mark channel as Secure AND Privileged
         self.registers.seccfgr.modify(CH_FIELDS[channel_id].val(1));

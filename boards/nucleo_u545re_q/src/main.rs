@@ -54,14 +54,14 @@ struct NucleoU545RE {
             stm32u545::tim::Tim2<'static>,
         >,
     >,
-    // hash: &'static capsules_extra::test::sha256_hw::TestSha256<
-    //     'static,
-    //     stm32u545::hash::Hash<'static>,
-    // >,
-    hash: &'static capsules_extra::test::hmac_sha256_hw::TestHmacSha256<
+    hash: &'static capsules_extra::test::sha256_hw::TestSha256<
         'static,
         stm32u545::hash::Hash<'static>,
     >,
+    // hash: &'static capsules_extra::test::hmac_sha256_hw::TestHmacSha256<
+    //     'static,
+    //     stm32u545::hash::Hash<'static>,
+    // >,
 }
 
 impl SyscallDriverLookup for NucleoU545RE {
@@ -252,16 +252,16 @@ unsafe fn start() -> (
 
     // Various test cases
     // Test 1: Simple SHA256
-    // let hash_data_buffer = static_init!([u8; 6], [0x61, 0x62, 0x63, 0x64, 0x65, 0x66]);
+    let hash_data_buffer = static_init!([u8; 6], [0x61, 0x62, 0x63, 0x64, 0x65, 0x66]);
 
-    // let hash_digest_buffer = static_init!(
-    //     [u8; 32],
-    //     [
-    //         0xbe, 0xf5, 0x7e, 0xc7, 0xf5, 0x3a, 0x6d, 0x40, 0xbe, 0xb6, 0x40, 0xa7, 0x80, 0xa6,
-    //         0x39, 0xc8, 0x3b, 0xc2, 0x9a, 0xc8, 0xa9, 0x81, 0x6f, 0x1f, 0xc6, 0xc5, 0xc6, 0xdc,
-    //         0xd9, 0x3c, 0x47, 0x21
-    //     ]
-    // );
+    let hash_digest_buffer = static_init!(
+        [u8; 32],
+        [
+            0xbe, 0xf5, 0x7e, 0xc7, 0xf5, 0x3a, 0x6d, 0x40, 0xbe, 0xb6, 0x40, 0xa7, 0x80, 0xa6,
+            0x39, 0xc8, 0x3b, 0xc2, 0x9a, 0xc8, 0xa9, 0x81, 0x6f, 0x1f, 0xc6, 0xc5, 0xc6, 0xdc,
+            0xd9, 0x3c, 0x47, 0x21
+        ]
+    );
 
     // Test 2: SHA256 with big message
     // let hash_data_buffer = static_init!(
@@ -343,19 +343,19 @@ unsafe fn start() -> (
     //
 
     // HMAC
-    let hmac_key = static_init!([u8; 1], [0x12]);
+    // let hmac_key = static_init!([u8; 1], [0x12]);
 
-    let hash_data_buffer = static_init!([u8; 4], [0x61, 0x62, 0x63, 0x64]);
+    // let hash_data_buffer = static_init!([u8; 4], [0x61, 0x62, 0x63, 0x64]);
 
-    let hash_digest_buffer = static_init!([u8; 32], [0u8; 32]);
-    let correct = static_init!(
-        [u8; 32],
-        [
-            0x9e, 0xc9, 0x2b, 0xb2, 0xe6, 0xdf, 0x61, 0x8f, 0x3e, 0x4d, 0x4a, 0x31, 0xf5, 0xe5,
-            0x27, 0xc2, 0x49, 0x6e, 0xae, 0x9b, 0x09, 0xc1, 0xe0, 0xcd, 0xe1, 0x33, 0x9c, 0xe2,
-            0x65, 0x00, 0xc6, 0x76
-        ]
-    );
+    // let hash_digest_buffer = static_init!([u8; 32], [0u8; 32]);
+    // let correct = static_init!(
+    //     [u8; 32],
+    //     [
+    //         0x9e, 0xc9, 0x2b, 0xb2, 0xe6, 0xdf, 0x61, 0x8f, 0x3e, 0x4d, 0x4a, 0x31, 0xf5, 0xe5,
+    //         0x27, 0xc2, 0x49, 0x6e, 0xae, 0x9b, 0x09, 0xc1, 0xe0, 0xcd, 0xe1, 0x33, 0x9c, 0xe2,
+    //         0x65, 0x00, 0xc6, 0x76
+    //     ]
+    // );
     //
     // Working example
     // let hmac_key = static_init!([u8; 1], [0x12]);
@@ -372,21 +372,21 @@ unsafe fn start() -> (
     //     ]
     // );
 
-    let test_hash = static_init!(
-        TestHmacSha256<'static, Hash<'static>>,
-        TestHmacSha256::new(
-            hash,
-            hmac_key,
-            hash_data_buffer,
-            hash_digest_buffer,
-            correct
-        )
-    );
-
     // let test_hash = static_init!(
-    //     TestSha256<'static, Hash<'static>>,
-    //     TestSha256::new(hash, hash_data_buffer, hash_digest_buffer, true)
+    //     TestHmacSha256<'static, Hash<'static>>,
+    //     TestHmacSha256::new(
+    //         hash,
+    //         hmac_key,
+    //         hash_data_buffer,
+    //         hash_digest_buffer,
+    //         correct
+    //     )
     // );
+
+    let test_hash = static_init!(
+        TestSha256<'static, Hash<'static>>,
+        TestSha256::new(hash, hash_data_buffer, hash_digest_buffer, true)
+    );
 
     // Platform and Interrupts
     let platform = static_init!(
