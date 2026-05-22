@@ -247,49 +247,35 @@ pub enum DmaPeripheral {
 
 pub enum DmaDataWidth {
     Byte,
-    HalfWord(PaddingAlignmentMode, ByteExchange),
-    Word(PaddingAlignmentMode, HalfWordExchange, ByteExchange),
+    HalfWord,
+    Word,
+}
+
+pub enum TransferSettings {
+    Source(DmaDataWidth, ByteExchange),
+    Destination(DmaDataWidth, ByteExchange, HalfWordExchange),
+}
+
+impl TransferSettings {
+    pub fn to_bits(&self) -> FieldValue<u32, DmaChannelTR1::Register> {
+        match self {
+            Self::Source(width, sb) => width.to_bits(false) + sb.to_bits(false),
+            Self::Destination(width, db, dh) => {
+                width.to_bits(true) + db.to_bits(true) + dh.to_bits()
+            }
+        }
+    }
 }
 
 impl DmaDataWidth {
-    pub fn to_transfer_settings(&self, is_dest: bool) -> FieldValue<u32, DmaChannelTR1::Register> {
+    pub fn to_bits(&self, is_dest: bool) -> FieldValue<u32, DmaChannelTR1::Register> {
         match (self, is_dest) {
-            (DmaDataWidth::Byte, false) => DmaChannelTR1::SDW_LOG2::BYTE,
-            (DmaDataWidth::HalfWord(_, _), false) => DmaChannelTR1::SDW_LOG2::HALF_WORD,
-            (DmaDataWidth::Word(_, _, bx), false) => {
-                (match bx {
-                    ByteExchange::NoByteExchange => DmaChannelTR1::SBX::CLEAR,
-                    ByteExchange::WithByteExchange => DmaChannelTR1::SBX::SET,
-                } + DmaChannelTR1::SDW_LOG2::WORD)
-            }
-            (DmaDataWidth::Byte, true) => DmaChannelTR1::DDW_LOG2::BYTE,
-            (DmaDataWidth::HalfWord(pad, bx), true) => {
-                (match bx {
-                    ByteExchange::NoByteExchange => DmaChannelTR1::DBX::CLEAR,
-                    ByteExchange::WithByteExchange => DmaChannelTR1::DBX::SET,
-                } + match pad {
-                    PaddingAlignmentMode::PackedUnpacked => DmaChannelTR1::PAM::P_UP,
-                    PaddingAlignmentMode::PaddedLeftTruncated => DmaChannelTR1::PAM::RAP0_LT,
-                    PaddingAlignmentMode::SignExtendedRightTruncated => {
-                        DmaChannelTR1::PAM::RASE_LART
-                    }
-                } + DmaChannelTR1::DDW_LOG2::HALF_WORD)
-            }
-            (DmaDataWidth::Word(pad, hwx, bx), true) => {
-                (match bx {
-                    ByteExchange::NoByteExchange => DmaChannelTR1::DBX::CLEAR,
-                    ByteExchange::WithByteExchange => DmaChannelTR1::DBX::SET,
-                } + match hwx {
-                    HalfWordExchange::NoHalfWordExchange => DmaChannelTR1::DHX::CLEAR,
-                    HalfWordExchange::WithHalfWordExchange => DmaChannelTR1::DHX::SET,
-                } + match pad {
-                    PaddingAlignmentMode::PackedUnpacked => DmaChannelTR1::PAM::P_UP,
-                    PaddingAlignmentMode::PaddedLeftTruncated => DmaChannelTR1::PAM::RAP0_LT,
-                    PaddingAlignmentMode::SignExtendedRightTruncated => {
-                        DmaChannelTR1::PAM::RASE_LART
-                    }
-                } + DmaChannelTR1::DDW_LOG2::WORD)
-            }
+            (Self::Byte, false) => DmaChannelTR1::SDW_LOG2::BYTE,
+            (Self::HalfWord, false) => DmaChannelTR1::SDW_LOG2::HALF_WORD,
+            (Self::Word, false) => DmaChannelTR1::SDW_LOG2::WORD,
+            (Self::Byte, true) => DmaChannelTR1::DDW_LOG2::BYTE,
+            (Self::HalfWord, true) => DmaChannelTR1::DDW_LOG2::HALF_WORD,
+            (Self::Word, true) => DmaChannelTR1::DDW_LOG2::WORD,
         }
     }
 }
@@ -299,9 +285,29 @@ pub enum ByteExchange {
     WithByteExchange,
 }
 
+impl ByteExchange {
+    pub fn to_bits(&self, is_dest: bool) -> FieldValue<u32, DmaChannelTR1::Register> {
+        match (self, is_dest) {
+            (Self::NoByteExchange, false) => DmaChannelTR1::SBX::CLEAR,
+            (Self::NoByteExchange, true) => DmaChannelTR1::DBX::CLEAR,
+            (Self::WithByteExchange, false) => DmaChannelTR1::SBX::SET,
+            (Self::WithByteExchange, true) => DmaChannelTR1::DBX::SET,
+        }
+    }
+}
+
 pub enum HalfWordExchange {
     NoHalfWordExchange,
     WithHalfWordExchange,
+}
+
+impl HalfWordExchange {
+    pub fn to_bits(&self) -> FieldValue<u32, DmaChannelTR1::Register> {
+        match self {
+            Self::NoHalfWordExchange => DmaChannelTR1::DHX::CLEAR,
+            Self::WithHalfWordExchange => DmaChannelTR1::DHX::SET,
+        }
+    }
 }
 
 pub enum PaddingAlignmentMode {
@@ -310,33 +316,63 @@ pub enum PaddingAlignmentMode {
     PackedUnpacked,
 }
 
+impl PaddingAlignmentMode {
+    pub fn to_bits(&self) -> FieldValue<u32, DmaChannelTR1::Register> {
+        match self {
+            Self::PaddedLeftTruncated => DmaChannelTR1::PAM::RAP0_LT,
+            Self::SignExtendedRightTruncated => DmaChannelTR1::PAM::RASE_LART,
+            Self::PackedUnpacked => DmaChannelTR1::PAM::P_UP,
+        }
+    }
+}
+
 impl DmaPeripheral {
-    fn get_params(&self) -> (u32, u32, DmaDirection, DmaDataWidth, DmaDataWidth) {
+    fn get_params(
+        &self,
+    ) -> (
+        u32,
+        u32,
+        DmaDirection,
+        TransferSettings,
+        TransferSettings,
+        PaddingAlignmentMode,
+    ) {
         match self {
             DmaPeripheral::Usart1Tx => (
                 USART1_TDR,
                 GPDMA_REQ_USART1_TX,
                 DmaDirection::MemoryToPeripheral,
-                DmaDataWidth::Byte,
-                DmaDataWidth::Byte,
+                TransferSettings::Source(DmaDataWidth::Byte, ByteExchange::NoByteExchange),
+                TransferSettings::Destination(
+                    DmaDataWidth::Byte,
+                    ByteExchange::NoByteExchange,
+                    HalfWordExchange::NoHalfWordExchange,
+                ),
+                PaddingAlignmentMode::PaddedLeftTruncated,
             ),
             DmaPeripheral::Usart1Rx => (
                 USART1_RDR,
                 GPDMA_REQ_USART1_RX,
                 DmaDirection::PeripheralToMemory,
-                DmaDataWidth::Byte,
-                DmaDataWidth::Byte,
+                TransferSettings::Source(DmaDataWidth::Byte, ByteExchange::NoByteExchange),
+                TransferSettings::Destination(
+                    DmaDataWidth::Byte,
+                    ByteExchange::NoByteExchange,
+                    HalfWordExchange::NoHalfWordExchange,
+                ),
+                PaddingAlignmentMode::PaddedLeftTruncated,
             ),
             DmaPeripheral::Hash => (
                 HASH_DIN,
                 GPDMA_REQ_HASH_IN,
                 DmaDirection::MemoryToPeripheral,
-                DmaDataWidth::Byte,
-                DmaDataWidth::Word(
-                    PaddingAlignmentMode::PackedUnpacked,
-                    HalfWordExchange::NoHalfWordExchange,
+                TransferSettings::Source(DmaDataWidth::Byte, ByteExchange::NoByteExchange),
+                TransferSettings::Destination(
+                    DmaDataWidth::Word,
                     ByteExchange::NoByteExchange,
+                    HalfWordExchange::NoHalfWordExchange,
                 ),
+                PaddingAlignmentMode::PackedUnpacked,
             ),
         }
     }
@@ -400,7 +436,7 @@ impl Dma {
         length: u32,
     ) {
         let channel_id: usize = channel.into();
-        let (periph_addr, reqsel, direction, src_data, dest_data) = peripheral.get_params();
+        let (periph_addr, reqsel, direction, src_data, dest_data, pam) = peripheral.get_params();
 
         // 1. Mark channel as Secure AND Privileged
         self.registers.seccfgr.modify(CH_FIELDS[channel_id].val(1));
@@ -431,8 +467,9 @@ impl Dma {
                         + DmaChannelTR1::DAP::CLEAR
                         + DmaChannelTR1::SSEC::SET
                         + DmaChannelTR1::DSEC::SET
-                        + src_data.to_transfer_settings(false)
-                        + dest_data.to_transfer_settings(true),
+                        + src_data.to_bits()
+                        + dest_data.to_bits()
+                        + pam.to_bits(),
                 );
                 // Source request comes from destination peripheral
                 ch.t_r2
@@ -447,8 +484,9 @@ impl Dma {
                     DmaChannelTR1::DINC::SET
                         + DmaChannelTR1::SSEC::SET
                         + DmaChannelTR1::DSEC::SET
-                        + src_data.to_transfer_settings(false)
-                        + dest_data.to_transfer_settings(true),
+                        + src_data.to_bits()
+                        + dest_data.to_bits()
+                        + pam.to_bits(),
                 );
                 // Source request comes from source peripheral
                 ch.t_r2.write(DmaChannelTR2::REQSEL.val(reqsel));
