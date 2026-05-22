@@ -13,7 +13,7 @@ use kernel::hil::digest::{
 };
 use kernel::utilities::cells::{MapCell, OptionalCell};
 use kernel::utilities::dma_slice::{DmaSubSlice, DmaSubSliceMut, DmaSubSliceMutImmut};
-use kernel::utilities::leasable_buffer::SubSliceMutImmut;
+use kernel::utilities::leasable_buffer::{SubSliceMutImmut, SubSliceMut};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::utilities::registers::{
     register_bitfields, register_structs, ReadOnly, ReadWrite, WriteOnly,
@@ -180,6 +180,9 @@ enum State {
 
 pub struct Leftover {
     buffer: Cell<Option<u32>>,
+    // it is used if the FIFO is full and we cannot write the leftover we collected.
+    // unfortunately, it is not possible to extend the subslice, I could have written the leftover on top of it.
+    secondary_buffer: Cell<Option<u32>>,
     index: Cell<usize>,
 }
 
@@ -187,40 +190,59 @@ impl Leftover {
     pub fn new() -> Self {
         Leftover {
             buffer: Cell::new(None),
+            secondary_buffer: Cell::new(None),
             index: Cell::new(0),
         }
     }
 
-    pub fn add(&self, byte: u8) {
-        self.buffer.update(|buf| match buf {
+    fn add_byte(buf: Option<u32>, byte: u8) -> Option<u32> {
+        match buf {
             Some(b) => Some(b >> 8 | (byte as u32).rotate_right(8)),
             None => Some((byte as u32).rotate_right(8)),
-        });
-        self.index.update(|index| (index + 1) % 4);
-    }
-
-    pub fn to_le(&self) -> u32 {
-        match self.buffer.take() {
-            Some(b) => {
-                let value = b >> (8 * self.bytes_left());
-                self.index.take();
-                value
-            }
-            None => 0,
         }
     }
 
+    pub fn add(&self, byte: u8) {
+        if self.is_full() {
+            self.buffer.update(|buf| Leftover::add_byte(buf, byte));
+        } else {
+            self.secondary_buffer.update(|buf| Leftover::add_byte(buf, byte));
+        }
+        self.index.update(|index| (index + 1) % 8);
+    }
+
+    pub fn to_le(&self) -> u32 {
+        let res = match self.buffer.take() {
+            Some(b) => {
+                let value = b >> (8 * self.bytes_left());
+                self.index.update(|idx| idx - 4);
+                if self.secondary_buffer.get().is_some() {
+                    self.buffer.set(self.secondary_buffer.take());
+                }
+                value
+            }
+            None => 0,
+        };
+
+        res
+    }
+
     pub fn bytes_left(&self) -> usize {
-        4 - self.index.get()
+        4 - (self.index.get() % 4)
     }
 
     pub fn is_full(&self) -> bool {
-        self.index.get() == 0 && self.buffer.get().is_some()
+        self.index.get() >= 4 && self.buffer.get().is_some()
     }
 
     pub fn is_empty(&self) -> bool {
         self.buffer.get().is_none()
     }
+}
+
+pub struct HmacKey<'a> {
+    key: MapCell<&'a [u8]>,
+    sublice: Cell<Option<SubSliceMut<'a, u8>>>,
 }
 
 pub struct Hash<'a> {
@@ -230,7 +252,7 @@ pub struct Hash<'a> {
     dma_buffer: MapCell<DmaSubSliceMutImmut<'static, u8>>,
     mode: Cell<Option<Mode>>,
     state: Cell<Option<State>>,
-    hmac_key: MapCell<[u8; MAX_HMAC_KEY_SIZE]>,
+    hmac_key: MapCell<&'a [u8]>,
     hmac_key_index: Cell<usize>,
     hmac_key_len: Cell<usize>,
     data: Cell<Option<SubSliceMutImmut<'static, u8>>>,
@@ -263,7 +285,7 @@ impl Hash<'_> {
             mode: Cell::new(None),
             state: Cell::new(None),
             data: Cell::new(None),
-            hmac_key: MapCell::new([0u8; MAX_HMAC_KEY_SIZE]),
+            hmac_key: MapCell::empty(),
             hmac_key_index: Cell::new(0),
             hmac_key_len: Cell::new(0),
             verify: Cell::new(false),
@@ -311,10 +333,15 @@ impl Hash<'_> {
             if let Some(state) = self.state.get() {
                 match state {
                     State::Add => {
-                        if !self.data_progress() {
-                            self.deferred_call.set();
+                        if self.dma.is_some() {
+                            regs.din.set(self.leftover.to_le());
+                            regs.cr.modify(CR::DMAE::SET);
                         } else {
-                            regs.imr.modify(IMR::DINIE::SET);
+                            if !self.data_progress() {
+                                self.deferred_call.set();
+                            } else {
+                                regs.imr.modify(IMR::DINIE::SET);
+                            }
                         }
                     }
                     State::HmacInit => {
@@ -476,7 +503,12 @@ impl Hash<'_> {
             self.leftover.add(data[data_idx]);
         }
         if self.leftover.is_full() {
-            self.regs.din.set(self.leftover.to_le());
+            let regs = self.regs;
+            if regs.sr.read(SR::NBWE) == 0 {
+                regs.imr.modify(IMR::DINIE::SET);
+            } else {
+                regs.din.set(self.leftover.to_le());
+            }
         }
         bytes_written
     }
@@ -538,10 +570,14 @@ impl Hash<'_> {
 
     fn load_key(&self, is_inner: bool) {
         let regs = self.regs;
-        self.hmac_key.map(|buf| {
-            let count = self.process(buf, self.hmac_key_len.get() - self.hmac_key_index.get());
-            debug!("Key loader: Sent {} bytes", count);
-            self.hmac_key_index.update(|idx| idx + count);
+        if let Some(key) = self.hmac_key.get() {
+            let count = self.process(, self.hmac_key_len.get() - self.hmac_key_index.get());
+        }
+        let count = self.process(self.hmac_key.get(), self.hmac_key_len.get() - self.hmac_key_index.get());
+        debug!("Key loader: Sent {} bytes", count);
+        self.hmac_key_index.update(|idx| idx + count);
+        self.hmac_key.(|buf| {
+
         });
         // Time to compute digest on it.
         debug!(
@@ -778,6 +814,7 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             return Err((ErrorCode::SIZE, data));
         }
         debug!("SHA: Entered SHA data adder");
+        self.state.set(Some(State::Add));
 
         // If DMA is available, then do use it.
         if let Some(dma) = self.dma.get() {
@@ -817,7 +854,9 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
                 self.dma_buffer
                     .replace(DmaSubSliceMutImmut::Mutable(dma_slice));
                 dma.setup(ch, crate::dma::DmaPeripheral::Hash, ptr, len);
-                self.regs.cr.modify(CR::DMAE::SET);
+                if !self.leftover.is_full() {
+                    self.regs.cr.modify(CR::DMAE::SET);
+                }
 
                 Ok(())
             } else {
@@ -846,7 +885,7 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
                 debug!("HMAC-SHA: We need to load a key");
                 self.load_key(true);
             } else {
-                self.state.set(Some(State::Add));
+                self.state.take();
                 // Otherwise, act as usual
                 let ret = self.data_progress();
                 // Why do I need this variable here?
@@ -862,6 +901,8 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
     }
 
     fn clear_data(&self) {
+        // NOTE(frihetselsker): you cannot cancel the operation,
+        // you can only discard all the changes and reset the peripheral
         unimplemented!()
     }
 }
@@ -958,25 +999,14 @@ impl Sha256 for Hash<'_> {
     }
 }
 
-impl HmacSha256 for Hash<'_> {
-    fn set_mode_hmacsha256(&self, key: &[u8]) -> Result<(), kernel::ErrorCode> {
+impl<'a> HmacSha256<'a> for Hash<'a> {
+    fn set_mode_hmacsha256(&self, key: &'a [u8]) -> Result<(), kernel::ErrorCode> {
         if self.state.get().is_some() {
             return Err(ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA2_256));
         debug!("Set mode: Key length: {}", key.len());
-        self.hmac_key
-            .map(|buf| {
-                debug!("Set mode: Buf length: {}", buf.len());
-                if buf.len() >= key.len() {
-                    buf[..key.len()].copy_from_slice(key);
-                    self.hmac_key_len.set(key.len());
-                    Ok(())
-                } else {
-                    Err(ErrorCode::SIZE)
-                }
-            })
-            .transpose()?;
+        self.hmac_key.put(key);
         self.regs
             .cr
             .modify(CR::ALGO::SHA2_256 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);
@@ -986,16 +1016,6 @@ impl HmacSha256 for Hash<'_> {
             self.regs.cr.modify(CR::LKEY::CLEAR + CR::INIT::SET);
         }
 
-        // now it's time to fill the buffer in
-
-        // self.hmac_key.set(key);
-        // we need to store this key throughout the whole operation
-        // and then load it to data subslice and process it as usually
-        //
-        // The problem is how to store a reference with anonymous lifetime.
-        //
-        // self.regs.cr.modify(CR::INIT::SET);
-        //
         Ok(())
     }
 }
@@ -1012,25 +1032,13 @@ impl Sha512 for Hash<'_> {
     }
 }
 
-impl HmacMd5 for Hash<'_> {
-    fn set_mode_hmacmd5(&self, key: &[u8]) -> Result<(), ErrorCode> {
+impl<'a> HmacMd5<'a> for Hash<'a> {
+    fn set_mode_hmacmd5(&self, key: &'a [u8]) -> Result<(), ErrorCode> {
         if self.state.get().is_some() {
             return Err(ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::MD5));
-        debug!("Set mode: Key length: {}", key.len());
-        self.hmac_key
-            .map(|buf| {
-                debug!("Set mode: Buf length: {}", buf.len());
-                if buf.len() >= key.len() {
-                    buf[..key.len()].copy_from_slice(key);
-                    self.hmac_key_len.set(key.len());
-                    Ok(())
-                } else {
-                    Err(ErrorCode::SIZE)
-                }
-            })
-            .transpose()?;
+        self.hmac_key.put(key);
         self.regs
             .cr
             .modify(CR::ALGO::MD5 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);
@@ -1039,40 +1047,17 @@ impl HmacMd5 for Hash<'_> {
         } else {
             self.regs.cr.modify(CR::LKEY::CLEAR + CR::INIT::SET);
         }
-
-        // now it's time to fill the buffer in
-
-        // self.hmac_key.set(key);
-        // we need to store this key throughout the whole operation
-        // and then load it to data subslice and process it as usually
-        //
-        // The problem is how to store a reference with anonymous lifetime.
-        //
-        // self.regs.cr.modify(CR::INIT::SET);
-        //
         Ok(())
     }
 }
 
-impl HmacSha1 for Hash<'_> {
-    fn set_mode_hmacsha1(&self, key: &[u8]) -> Result<(), ErrorCode> {
+impl<'a> HmacSha1<'a> for Hash<'a> {
+    fn set_mode_hmacsha1(&self, key: &'a [u8]) -> Result<(), ErrorCode> {
         if self.state.get().is_some() {
             return Err(ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA1));
-        debug!("Set mode: Key length: {}", key.len());
-        self.hmac_key
-            .map(|buf| {
-                debug!("Set mode: Buf length: {}", buf.len());
-                if buf.len() >= key.len() {
-                    buf[..key.len()].copy_from_slice(key);
-                    self.hmac_key_len.set(key.len());
-                    Ok(())
-                } else {
-                    Err(ErrorCode::SIZE)
-                }
-            })
-            .transpose()?;
+        self.hmac_key.put(key);
         self.regs
             .cr
             .modify(CR::ALGO::SHA_1 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);
@@ -1081,40 +1066,17 @@ impl HmacSha1 for Hash<'_> {
         } else {
             self.regs.cr.modify(CR::LKEY::CLEAR + CR::INIT::SET);
         }
-
-        // now it's time to fill the buffer in
-
-        // self.hmac_key.set(key);
-        // we need to store this key throughout the whole operation
-        // and then load it to data subslice and process it as usually
-        //
-        // The problem is how to store a reference with anonymous lifetime.
-        //
-        // self.regs.cr.modify(CR::INIT::SET);
-        //
         Ok(())
     }
 }
 
-impl HmacSha224 for Hash<'_> {
-    fn set_mode_hmacsha224(&self, key: &[u8]) -> Result<(), ErrorCode> {
+impl<'a> HmacSha224<'a> for Hash<'a> {
+    fn set_mode_hmacsha224(&self, key: &'a [u8]) -> Result<(), ErrorCode> {
         if self.state.get().is_some() {
             return Err(ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA2_224));
-        debug!("Set mode: Key length: {}", key.len());
-        self.hmac_key
-            .map(|buf| {
-                debug!("Set mode: Buf length: {}", buf.len());
-                if buf.len() >= key.len() {
-                    buf[..key.len()].copy_from_slice(key);
-                    self.hmac_key_len.set(key.len());
-                    Ok(())
-                } else {
-                    Err(ErrorCode::SIZE)
-                }
-            })
-            .transpose()?;
+        self.hmac_key.put(key);
         self.regs
             .cr
             .modify(CR::ALGO::SHA2_224 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);
@@ -1124,28 +1086,18 @@ impl HmacSha224 for Hash<'_> {
             self.regs.cr.modify(CR::LKEY::CLEAR + CR::INIT::SET);
         }
 
-        // now it's time to fill the buffer in
-
-        // self.hmac_key.set(key);
-        // we need to store this key throughout the whole operation
-        // and then load it to data subslice and process it as usually
-        //
-        // The problem is how to store a reference with anonymous lifetime.
-        //
-        // self.regs.cr.modify(CR::INIT::SET);
-        //
         Ok(())
     }
 }
 
-impl HmacSha384 for Hash<'_> {
-    fn set_mode_hmacsha384(&self, _key: &[u8]) -> Result<(), kernel::ErrorCode> {
+impl<'a> HmacSha384<'a> for Hash<'a> {
+    fn set_mode_hmacsha384(&self, _key: &'a [u8]) -> Result<(), kernel::ErrorCode> {
         Err(kernel::ErrorCode::NOSUPPORT)
     }
 }
 
-impl HmacSha512 for Hash<'_> {
-    fn set_mode_hmacsha512(&self, _key: &[u8]) -> Result<(), kernel::ErrorCode> {
+impl<'a> HmacSha512<'a> for Hash<'a> {
+    fn set_mode_hmacsha512(&self, _key: &'a [u8]) -> Result<(), kernel::ErrorCode> {
         Err(kernel::ErrorCode::NOSUPPORT)
     }
 }
