@@ -30,7 +30,7 @@ pub struct TestSha256<'a, H: digest::Digest<'a, 32>> {
 // We add data in chunks of 12 bytes to ensure that the underlying
 // buffering mechanism works correctly (it can handle filling blocks
 // as well as zeroing out incomplete blocks).
-const CHUNK_SIZE: usize = 256;
+const CHUNK_SIZE: usize = 50;
 
 impl<'a, H: digest::Digest<'a, 32> + digest::Sha256 + digest::Bit8Data> TestSha256<'a, H> {
     pub fn new(
@@ -77,7 +77,7 @@ impl<'a, H: digest::Digest<'a, 32>> digest::ClientData<32> for TestSha256<'a, H>
     }
 
     fn add_mut_data_done(&self, result: Result<(), ErrorCode>, mut data: SubSliceMut<'static, u8>) {
-        debug!("Leftover: {:02x?}", data.as_slice());
+        debug!("TEST-SHA256: Leftover: {:02x?}", data.as_slice());
         if data.len() != 0 {
             let r = self.sha.add_mut_data(data);
             if r.is_err() {

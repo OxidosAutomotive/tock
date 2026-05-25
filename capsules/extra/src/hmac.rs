@@ -91,9 +91,9 @@ pub struct HmacDriver<'a, H: digest::Digest<'a, DIGEST_LEN>, const DIGEST_LEN: u
 impl<
         'a,
         H: digest::Digest<'a, DIGEST_LEN>
-            + digest::HmacSha256
-            + digest::HmacSha384
-            + digest::HmacSha512,
+            + digest::HmacSha256<'a>
+            + digest::HmacSha384<'a>
+            + digest::HmacSha512<'a>,
         const DIGEST_LEN: usize,
     > HmacDriver<'a, H, DIGEST_LEN>
 {
@@ -132,18 +132,20 @@ impl<
                                         [0; TMP_KEY_BUFFER_SIZE];
                                     let key_len = core::cmp::min(k.len(), TMP_KEY_BUFFER_SIZE);
                                     k[..key_len].copy_to_slice(&mut tmp_key_buffer[..key_len]);
+                                    Ok(())
 
-                                    match op {
-                                        ShaOperation::Sha256 => self
-                                            .hmac
-                                            .set_mode_hmacsha256(&tmp_key_buffer[..key_len]),
-                                        ShaOperation::Sha384 => self
-                                            .hmac
-                                            .set_mode_hmacsha384(&tmp_key_buffer[..key_len]),
-                                        ShaOperation::Sha512 => self
-                                            .hmac
-                                            .set_mode_hmacsha512(&tmp_key_buffer[..key_len]),
-                                    }
+                                    // FIXME(frihetselsker)
+                                    // match op {
+                                    //     ShaOperation::Sha256 => self
+                                    //         .hmac
+                                    //         .set_mode_hmacsha256(&tmp_key_buffer[..key_len]),
+                                    //     ShaOperation::Sha384 => self
+                                    //         .hmac
+                                    //         .set_mode_hmacsha384(&tmp_key_buffer[..key_len]),
+                                    //     ShaOperation::Sha512 => self
+                                    //         .hmac
+                                    //         .set_mode_hmacsha512(&tmp_key_buffer[..key_len]),
+                                    // }
                                 } else {
                                     Err(ErrorCode::INVAL)
                                 }
@@ -251,9 +253,9 @@ impl<
 impl<
         'a,
         H: digest::Digest<'a, DIGEST_LEN>
-            + digest::HmacSha256
-            + digest::HmacSha384
-            + digest::HmacSha512,
+            + digest::HmacSha256<'a>
+            + digest::HmacSha384<'a>
+            + digest::HmacSha512<'a>,
         const DIGEST_LEN: usize,
     > digest::ClientData<DIGEST_LEN> for HmacDriver<'a, H, DIGEST_LEN>
 {
@@ -389,9 +391,9 @@ impl<
 impl<
         'a,
         H: digest::Digest<'a, DIGEST_LEN>
-            + digest::HmacSha256
-            + digest::HmacSha384
-            + digest::HmacSha512,
+            + digest::HmacSha256<'a>
+            + digest::HmacSha384<'a>
+            + digest::HmacSha512<'a>,
         const DIGEST_LEN: usize,
     > digest::ClientHash<DIGEST_LEN> for HmacDriver<'a, H, DIGEST_LEN>
 {
@@ -443,9 +445,9 @@ impl<
 impl<
         'a,
         H: digest::Digest<'a, DIGEST_LEN>
-            + digest::HmacSha256
-            + digest::HmacSha384
-            + digest::HmacSha512,
+            + digest::HmacSha256<'a>
+            + digest::HmacSha384<'a>
+            + digest::HmacSha512<'a>,
         const DIGEST_LEN: usize,
     > digest::ClientVerify<DIGEST_LEN> for HmacDriver<'a, H, DIGEST_LEN>
 {
@@ -496,9 +498,9 @@ impl<
 impl<
         'a,
         H: digest::Digest<'a, DIGEST_LEN>
-            + digest::HmacSha256
-            + digest::HmacSha384
-            + digest::HmacSha512,
+            + digest::HmacSha256<'a>
+            + digest::HmacSha384<'a>
+            + digest::HmacSha512<'a>,
         const DIGEST_LEN: usize,
     > SyscallDriver for HmacDriver<'a, H, DIGEST_LEN>
 {

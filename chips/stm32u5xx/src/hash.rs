@@ -2,18 +2,21 @@ use core::cell::Cell;
 use core::cmp::min;
 use core::ops::Index;
 
+use crate::dma::DmaChannelEnable::CH0;
 use crate::dma::{ChannelId, Dma};
 
 use cortexm33::dma_fence::CortexMDmaFence;
+use cortexm33::mpu::new;
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
 use kernel::hil::digest::{
     Bit16Data, Bit1Data, Bit32Data, Bit8Data, Client, Digest, DigestData, DigestHash, DigestVerify,
     HmacMd5, HmacSha1, HmacSha224, HmacSha256, HmacSha384, HmacSha512, Md5, Sha1, Sha224, Sha256,
     Sha384, Sha512,
 };
+use kernel::process::ProcessStandardDebugFull;
 use kernel::utilities::cells::{MapCell, OptionalCell};
 use kernel::utilities::dma_slice::{DmaSubSlice, DmaSubSliceMut, DmaSubSliceMutImmut};
-use kernel::utilities::leasable_buffer::{SubSliceMutImmut, SubSliceMut};
+use kernel::utilities::leasable_buffer::{SubSlice, SubSliceMutImmut};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::utilities::registers::{
     register_bitfields, register_structs, ReadOnly, ReadWrite, WriteOnly,
@@ -147,7 +150,6 @@ pub const HASH_BASE: StaticRef<HashRegisters> =
 // SHA2-256 has the largest digest.
 const MAX_DIGEST_LEN: usize = 32;
 const LONG_HMAC_KEY_LEN: usize = 64;
-const MAX_HMAC_KEY_SIZE: usize = 128;
 
 #[derive(Clone, Copy)]
 enum Mode {
@@ -203,19 +205,36 @@ impl Leftover {
     }
 
     pub fn add(&self, byte: u8) {
-        if self.is_full() {
+        debug!("Leftover: add new byte");
+        if !self.is_full() {
             self.buffer.update(|buf| Leftover::add_byte(buf, byte));
         } else {
-            self.secondary_buffer.update(|buf| Leftover::add_byte(buf, byte));
+            self.secondary_buffer
+                .update(|buf| Leftover::add_byte(buf, byte));
         }
+
+        // match self.buffer.get() {
+        //     Some(buf) => debug!("Leftover: current buffer: 0x{:02x}", buf),
+        //     _ => debug!("Leftover: current buffer not exist"),
+        // }
+
+        // match self.secondary_buffer.get() {
+        //     Some(buf) => debug!("Leftover: current 2ndary buffer: 0x{:02x}", buf),
+        //     _ => debug!("Leftover: current 2ndary buffer not exist"),
+        // }
+
         self.index.update(|index| (index + 1) % 8);
+        debug!("Leftover: current index {}", self.index.get());
     }
 
     pub fn to_le(&self) -> u32 {
+        debug!("Leftover: entered to_le");
         let res = match self.buffer.take() {
             Some(b) => {
                 let value = b >> (8 * self.bytes_left());
-                self.index.update(|idx| idx - 4);
+                // CRITICAL: This is a bug!!!!
+                // UPD: Fixed
+                self.index.update(|idx| idx.saturating_sub(4));
                 if self.secondary_buffer.get().is_some() {
                     self.buffer.set(self.secondary_buffer.take());
                 }
@@ -241,8 +260,59 @@ impl Leftover {
 }
 
 pub struct HmacKey<'a> {
-    key: MapCell<&'a [u8]>,
-    sublice: Cell<Option<SubSliceMut<'a, u8>>>,
+    key: Cell<Option<SubSlice<'a, u8>>>,
+    is_loaded: Cell<Option<bool>>,
+}
+
+impl<'a> HmacKey<'a> {
+    pub fn new() -> Self {
+        Self {
+            key: Cell::new(None),
+            is_loaded: Cell::new(None),
+        }
+    }
+
+    pub fn set(&self, key: &'a [u8]) {
+        self.key.set(Some(SubSlice::new(key)));
+    }
+
+    pub fn is_stored(&self) -> bool {
+        self.key.get().is_some()
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        if let Some(loaded) = self.is_loaded.get() {
+            loaded
+        } else {
+            false
+        }
+    }
+
+    pub fn prepare_key(&self) {
+        if let Some(mut key) = self.key.get() {
+            key.reset();
+        }
+    }
+
+    pub fn left_to_load(&self) -> usize {
+        if let Some(key) = self.key.get() {
+            key.len()
+        } else {
+            0
+        }
+    }
+
+    pub fn reset(&self) {
+        if let Some(mut key) = self.key.get() {
+            self.is_loaded.set(Some(false));
+            key.reset();
+        }
+    }
+
+    pub fn clear(&self) {
+        self.is_loaded.set(None);
+        self.key.take();
+    }
 }
 
 pub struct Hash<'a> {
@@ -252,9 +322,7 @@ pub struct Hash<'a> {
     dma_buffer: MapCell<DmaSubSliceMutImmut<'static, u8>>,
     mode: Cell<Option<Mode>>,
     state: Cell<Option<State>>,
-    hmac_key: MapCell<&'a [u8]>,
-    hmac_key_index: Cell<usize>,
-    hmac_key_len: Cell<usize>,
+    hmac_key: HmacKey<'a>,
     data: Cell<Option<SubSliceMutImmut<'static, u8>>>,
     leftover: Leftover,
     verify: Cell<bool>,
@@ -267,7 +335,7 @@ pub struct Hash<'a> {
 }
 
 impl<'a> Hash<'a> {
-    // Associates a DMA controller and channels with the USART driver.
+    // Associates a DMA controller and channels with the HASH driver
     pub fn set_dma(hash: &'static Self, dma: &'a Dma, channel: ChannelId) {
         hash.dma.set(dma);
         hash.dma_channel.set(Some(channel));
@@ -285,9 +353,7 @@ impl Hash<'_> {
             mode: Cell::new(None),
             state: Cell::new(None),
             data: Cell::new(None),
-            hmac_key: MapCell::empty(),
-            hmac_key_index: Cell::new(0),
-            hmac_key_len: Cell::new(0),
+            hmac_key: HmacKey::new(),
             verify: Cell::new(false),
             leftover: Leftover::new(),
             digest: OptionalCell::empty(),
@@ -314,11 +380,11 @@ impl Hash<'_> {
                     State::HmacFinalize => {
                         // it is time to return data
                         // reset index
-                        self.hmac_key_index.take();
+                        // self.hmac_key_index.take();
                         self.return_data();
                     }
                     State::Run => {
-                        if self.hmac_key.is_some() {
+                        if self.hmac_key.is_stored() {
                             // We need to load a key as well
                             self.load_key(false);
                         } else {
@@ -352,7 +418,7 @@ impl Hash<'_> {
                     }
                     State::HmacPreAuth => {
                         self.state.set(Some(State::Add));
-                        self.hmac_key_index.take();
+                        self.hmac_key.is_loaded.set(Some(true));
                         debug!("It is time to write the actual data");
                         if !self.data_progress() {
                             // we added all the data
@@ -490,7 +556,10 @@ impl Hash<'_> {
                 self.leftover.add(data[data_idx]);
             }
             if self.leftover.is_full() {
-                regs.din.set(self.leftover.to_le());
+                let new_word = self.leftover.to_le();
+                debug!("SHA: Leftover word written {:02x}", new_word);
+                debug!("SHA: Current index: {}", self.leftover.index.get());
+                regs.din.set(new_word);
             }
         }
 
@@ -498,7 +567,8 @@ impl Hash<'_> {
     }
 
     fn trim_subslice(&self, data: &dyn Index<usize, Output = u8>, count: usize) -> usize {
-        let bytes_written = min(self.leftover.bytes_left(), count);
+        let bytes_written = min(self.leftover.bytes_left(), count % 4);
+        debug!("Trim_subslice: writing {} bytes", bytes_written);
         for data_idx in 0..bytes_written {
             self.leftover.add(data[data_idx]);
         }
@@ -533,8 +603,11 @@ impl Hash<'_> {
                     false
                 } else {
                     // NOTE(frihetselsker): Look at leasable_buffer section in the docs.
-                    let count = self.trim_subslice(&b, b.len());
-                    b.slice(count..);
+                    debug!("Progress: any_leftover? {}", !self.leftover.is_empty());
+                    if !self.leftover.is_empty() {
+                        let count = self.trim_subslice(&b, b.len());
+                        b.slice(count..);
+                    }
                     let count = self.process(&b, b.len());
                     b.slice(count..);
                     if b.len() == 0 {
@@ -552,8 +625,11 @@ impl Hash<'_> {
                     self.data.set(Some(SubSliceMutImmut::Mutable(b)));
                     false
                 } else {
-                    let count = self.trim_subslice(&b, b.len());
-                    b.slice(count..);
+                    debug!("Progress: any_leftover? {}", !self.leftover.is_empty());
+                    if !self.leftover.is_empty() {
+                        let count = self.trim_subslice(&b, b.len());
+                        b.slice(count..);
+                    }
                     let count = self.process(&b, b.len());
                     b.slice(count..);
                     if b.len() == 0 {
@@ -570,47 +646,44 @@ impl Hash<'_> {
 
     fn load_key(&self, is_inner: bool) {
         let regs = self.regs;
-        if let Some(key) = self.hmac_key.get() {
-            let count = self.process(, self.hmac_key_len.get() - self.hmac_key_index.get());
-        }
-        let count = self.process(self.hmac_key.get(), self.hmac_key_len.get() - self.hmac_key_index.get());
-        debug!("Key loader: Sent {} bytes", count);
-        self.hmac_key_index.update(|idx| idx + count);
-        self.hmac_key.(|buf| {
+        if let Some(mut key) = self.hmac_key.key.get() {
+            let count = self.process(&key, key.len());
+            key.slice(count..);
+            debug!("Key loader: Sent {} bytes", count);
 
-        });
-        // Time to compute digest on it.
-        debug!(
-            "Key loader: key_len {} bytes, index {} bytes",
-            self.hmac_key_len.get(),
-            self.hmac_key_index.get()
-        );
-        if self.hmac_key_len.get() == self.hmac_key_index.get() {
-            regs.imr.modify(IMR::DINIE::SET);
-            if !self.leftover.is_empty() {
-                self.flush_leftover();
+            // Time to compute digest on it.
+            debug!(
+                "Key loader: left to load {} bytes",
+                self.hmac_key.left_to_load()
+            );
+
+            if key.len() == 0 {
+                regs.imr.modify(IMR::DINIE::SET);
+                if !self.leftover.is_empty() {
+                    self.flush_leftover();
+                }
+
+                self.state.update(|_| {
+                    if is_inner {
+                        Some(State::HmacPreAuth)
+                    } else {
+                        Some(State::HmacFinalize)
+                    }
+                });
+                // start the final digest calculation
+                debug!("KEY-SHA: Start computation");
+                regs.str.modify(STR::DCAL::SET);
+            } else {
+                // We need to process more
+                self.state.update(|_| {
+                    if is_inner {
+                        Some(State::HmacInit)
+                    } else {
+                        Some(State::HmacPostAuth)
+                    }
+                });
+                regs.imr.modify(IMR::DINIE::SET);
             }
-
-            self.state.update(|_| {
-                if is_inner {
-                    Some(State::HmacPreAuth)
-                } else {
-                    Some(State::HmacFinalize)
-                }
-            });
-            // start the final digest calculation
-            debug!("KEY-SHA: Start computation");
-            regs.str.modify(STR::DCAL::SET);
-        } else {
-            // We need to process more
-            self.state.update(|_| {
-                if is_inner {
-                    Some(State::HmacInit)
-                } else {
-                    Some(State::HmacPostAuth)
-                }
-            });
-            regs.imr.modify(IMR::DINIE::SET);
         }
     }
 
@@ -644,14 +717,20 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
         // set the padding
         // assume that we write bytes, not bit by bit
         // Do I need to create a separate function?
+        debug!(
+            "RUN: Do we need to flush leftovers? {}",
+            !self.leftover.is_empty()
+        );
+        debug!("RUN: leftover index {}", self.leftover.index.get());
         if !self.leftover.is_empty() {
+            debug!("RUN: We have some leftovers here");
             self.flush_leftover();
         } else {
             regs.str.modify(STR::NBLW.val(0));
         }
         // enable the interrupt
         //debug!("SHA: Enable the interrupt for digest finish");
-        if self.hmac_key.is_some() {
+        if self.hmac_key.is_stored() {
             regs.imr.modify(IMR::DCIE::SET + IMR::DINIE::SET);
         } else {
             regs.imr.modify(IMR::DCIE::SET);
@@ -716,8 +795,12 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             // Prepare the buffer with slicing
             // Trim from the beginning
             // We must ensure that DMA receives size divisible by 4 (only 32-bit words)
-            let count = self.trim_subslice(&data, data.len());
-            data.slice(count..);
+            debug!("DMA-SHA: Trim if needed");
+            if !self.leftover.is_empty() {
+                let count = self.trim_subslice(&data, data.len());
+                debug!("DMA-SHA: Trimmed {} bytes", count);
+                data.slice(count..);
+            }
             // Truncate
             let count = self.truncate_subslice(&data, data.len());
             data.slice(..data.len() - count);
@@ -745,21 +828,21 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             }
         } else {
             if data.len() > self.regs.sr.read(SR::NBWE) as usize
-                || (self.hmac_key_len.get() > self.regs.sr.read(SR::NBWE) as usize
-                    && self.hmac_key_len.get() > self.hmac_key_index.get())
+                || (self.hmac_key.left_to_load() > self.regs.sr.read(SR::NBWE) as usize
+                    && !self.hmac_key.is_loaded())
             {
                 self.regs.imr.modify(IMR::DINIE::SET);
             }
 
             self.data.set(Some(SubSliceMutImmut::Immutable(data)));
 
-            debug!(
-                "HMAC-SHA: key_len {}, index {}",
-                self.hmac_key_len.get(),
-                self.hmac_key_index.get()
-            );
+            // debug!(
+            //     "HMAC-SHA: key_len {}, index {}",
+            //     self.hmac_key_len.get(),
+            //     self.hmac_key_index.get()
+            // );
             // If we have key and it is not loaded yet, do load it now
-            if self.hmac_key.is_some() && self.hmac_key_len.get() > self.hmac_key_index.get() {
+            if self.hmac_key.is_stored() && self.hmac_key.left_to_load() > 0 {
                 debug!("HMAC-SHA: We need to load a key");
                 self.load_key(true);
             } else {
@@ -814,7 +897,10 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             return Err((ErrorCode::SIZE, data));
         }
         debug!("SHA: Entered SHA data adder");
-        self.state.set(Some(State::Add));
+
+        let availvable_places = self.regs.sr.read(SR::NBWE);
+        debug!("SHA: {} bytes can be added", availvable_places);
+        // self.state.set(Some(State::Add));
 
         // If DMA is available, then do use it.
         if let Some(dma) = self.dma.get() {
@@ -830,9 +916,11 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
             // Trim from the beginning
             // We must ensure that DMA receives size divisible by 4 (only 32-bit words)
             debug!("DMA-SHA: Trim if needed");
-            let count = self.trim_subslice(&data, data.len());
-            debug!("DMA-SHA: Trimmed {} bytes", count);
-            data.slice(count..);
+            if !self.leftover.is_empty() {
+                let count = self.trim_subslice(&data, data.len());
+                debug!("DMA-SHA: Trimmed {} bytes", count);
+                data.slice(count..);
+            }
             // Truncate
             let count = self.truncate_subslice(&data, data.len());
             debug!("DMA-SHA: Truncated {} bytes", count);
@@ -868,20 +956,20 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
         } else {
             // Otherwise, rely on the software loading
             if data.len() > self.regs.sr.read(SR::NBWE) as usize
-                || (self.hmac_key_len.get() > self.regs.sr.read(SR::NBWE) as usize
-                    && self.hmac_key_len.get() > self.hmac_key_index.get())
+                || (self.hmac_key.left_to_load() > self.regs.sr.read(SR::NBWE) as usize
+                    && !self.hmac_key.is_loaded())
             {
                 self.regs.imr.modify(IMR::DINIE::SET);
             }
             self.data.set(Some(SubSliceMutImmut::Mutable(data)));
 
-            debug!(
-                "HMAC-SHA: key_len {}, index {}",
-                self.hmac_key_len.get(),
-                self.hmac_key_index.get()
-            );
+            // debug!(
+            //     "HMAC-SHA: key_len {}, index {}",
+            //     self.hmac_key_len.get(),
+            //     self.hmac_key_index.get()
+            // );
             // If we have key and it is not loaded yet, do load it now
-            if self.hmac_key.is_some() && self.hmac_key_len.get() > self.hmac_key_index.get() {
+            if self.hmac_key.is_stored() && self.hmac_key.is_loaded() {
                 debug!("HMAC-SHA: We need to load a key");
                 self.load_key(true);
             } else {
@@ -940,7 +1028,7 @@ impl Md5 for Hash<'_> {
                 + CR::DATATYPE::_8bitData
                 + CR::INIT::SET,
         );
-        self.hmac_key.take();
+        self.hmac_key.clear();
         Ok(())
     }
 }
@@ -958,7 +1046,6 @@ impl Sha1 for Hash<'_> {
                 + CR::DATATYPE::_8bitData
                 + CR::INIT::SET,
         );
-        self.hmac_key.take();
         Ok(())
     }
 }
@@ -976,7 +1063,6 @@ impl Sha224 for Hash<'_> {
                 + CR::DATATYPE::_8bitData
                 + CR::INIT::SET,
         );
-        self.hmac_key.take();
         Ok(())
     }
 }
@@ -994,7 +1080,7 @@ impl Sha256 for Hash<'_> {
                 + CR::DATATYPE::_8bitData
                 + CR::INIT::SET,
         );
-        self.hmac_key.take();
+        self.hmac_key.clear();
         Ok(())
     }
 }
@@ -1006,7 +1092,7 @@ impl<'a> HmacSha256<'a> for Hash<'a> {
         }
         self.mode.set(Some(Mode::SHA2_256));
         debug!("Set mode: Key length: {}", key.len());
-        self.hmac_key.put(key);
+        self.hmac_key.set(key);
         self.regs
             .cr
             .modify(CR::ALGO::SHA2_256 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);
@@ -1038,7 +1124,7 @@ impl<'a> HmacMd5<'a> for Hash<'a> {
             return Err(ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::MD5));
-        self.hmac_key.put(key);
+        self.hmac_key.set(key);
         self.regs
             .cr
             .modify(CR::ALGO::MD5 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);
@@ -1057,7 +1143,7 @@ impl<'a> HmacSha1<'a> for Hash<'a> {
             return Err(ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA1));
-        self.hmac_key.put(key);
+        self.hmac_key.set(key);
         self.regs
             .cr
             .modify(CR::ALGO::SHA_1 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);
@@ -1076,7 +1162,7 @@ impl<'a> HmacSha224<'a> for Hash<'a> {
             return Err(ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA2_224));
-        self.hmac_key.put(key);
+        self.hmac_key.set(key);
         self.regs
             .cr
             .modify(CR::ALGO::SHA2_224 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);

@@ -503,7 +503,7 @@ impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> hil::dige
     }
 }
 
-impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> hil::digest::HmacSha256
+impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> hil::digest::HmacSha256<'a>
     for HmacSha256Software<'a, S>
 {
     fn set_mode_hmacsha256(&self, key: &[u8]) -> Result<(), ErrorCode> {
@@ -533,7 +533,7 @@ impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> hil::dige
     }
 }
 
-impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> hil::digest::HmacSha384
+impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> hil::digest::HmacSha384<'a>
     for HmacSha256Software<'a, S>
 {
     fn set_mode_hmacsha384(&self, _key: &[u8]) -> Result<(), ErrorCode> {
@@ -541,7 +541,7 @@ impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> hil::dige
     }
 }
 
-impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> hil::digest::HmacSha512
+impl<'a, S: hil::digest::Sha256 + hil::digest::DigestDataHash<'a, 32>> hil::digest::HmacSha512<'a>
     for HmacSha256Software<'a, S>
 {
     fn set_mode_hmacsha512(&self, _key: &[u8]) -> Result<(), ErrorCode> {
