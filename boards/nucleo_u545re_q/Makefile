@@ -22,6 +22,11 @@ flash-debug: $(TOCK_ROOT_DIRECTORY)target/$(TARGET)/debug/$(PLATFORM).elf
 flash: $(TOCK_ROOT_DIRECTORY)target/$(TARGET)/release/$(PLATFORM).elf
 	$(OPENOCD) $(OPENOCD_OPTIONS) -c "init; halt; stm32l4x mass_erase 0; program $< verify reset exit"
 
+.PHONY: flash-probe-rs
+flash-probe-rs: $(TOCK_ROOT_DIRECTORY)target/$(TARGET)/release/$(PLATFORM).elf
+	$(Q)probe-rs download --chip STM32U545RETx --allow-erase-all $(TOCK_ROOT_DIRECTORY)target/$(TARGET)/release/$(PLATFORM).elf
+	$(Q)probe-rs reset --chip STM32U545RETx
+
 .PHONY: program
 program:
 	tockloader install --openocd --board nucleo_u545re_q $(APP)
