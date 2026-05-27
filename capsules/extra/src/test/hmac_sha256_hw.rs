@@ -67,7 +67,7 @@ impl<'a, H: digest::Digest<'a, 32>> digest::ClientData<32> for TestHmacSha256<'a
 
     fn add_mut_data_done(&self, result: Result<(), ErrorCode>, data: SubSliceMut<'static, u8>) {
         self.data.replace(data.take());
-
+        debug!("CAP: Reached callback");
         match result {
             Ok(()) => {}
             Err(e) => {
