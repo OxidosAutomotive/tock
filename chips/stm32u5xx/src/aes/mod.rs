@@ -11,7 +11,7 @@ use crate::dma::DmaPeripheral;
 use core::cell::Cell;
 use core::marker::PhantomData;
 use cortexm33::dma_fence::CortexMDmaFence;
-use kernel::hil::symmetric_encryption::{AESKeySize, AES, AES128_IV_SIZE, AES_BLOCK_SIZE};
+use kernel::hil::symmetric_encryption::{AESKeySize, AES, AES_BLOCK_SIZE, AES_IV_SIZE};
 use kernel::utilities::cells::{MapCell, OptionalCell, TakeCell};
 use kernel::utilities::dma_slice::DmaSubSliceMut;
 use kernel::utilities::leasable_buffer::SubSliceMut;
@@ -96,7 +96,7 @@ pub struct Aes<'a, K: AESKeySize> {
     pub(crate) ccm_client: OptionalCell<&'a dyn kernel::hil::symmetric_encryption::CCMClient>,
     pub(crate) input: TakeCell<'static, [u8]>,
     pub(crate) output: TakeCell<'static, [u8]>,
-    pub(crate) iv: Cell<[u8; AES128_IV_SIZE]>,
+    pub(crate) iv: Cell<[u8; AES_IV_SIZE]>,
     pub(crate) dma_utils: DMACompatibility,
     pub(crate) _phantom: PhantomData<K>,
 }
@@ -114,7 +114,7 @@ impl<'a, K: AESKeySize> Aes<'a, K> {
             ccm_client: OptionalCell::empty(),
             input: TakeCell::empty(),
             output: TakeCell::empty(),
-            iv: Cell::new([0u8; AES128_IV_SIZE]),
+            iv: Cell::new([0u8; AES_IV_SIZE]),
             dma_utils: DMACompatibility {
                 dma: OptionalCell::empty(),
                 dma_in_channel: Cell::new(None),
@@ -323,8 +323,8 @@ impl<'a, K: AESKeySize> Aes<'a, K> {
         }
     }
 
-    /// Helper to write a AES128_IV_SIZE-byte IV into the hardware IV registers
-    pub(crate) fn write_iv_registers(&self, iv: &[u8; AES128_IV_SIZE]) {
+    /// Helper to write a AES_IV_SIZE-byte IV into the hardware IV registers
+    pub(crate) fn write_iv_registers(&self, iv: &[u8; AES_IV_SIZE]) {
         for (reg, chunk) in self.registers.ivr.iter().rev().zip(iv.chunks_exact(4)) {
             let word = u32::from_be_bytes(chunk.try_into().expect("IV chunk len mismatch"));
             reg.write(Data::DATA.val(word));
@@ -412,12 +412,12 @@ impl<'a, K: AESKeySize> Aes<'a, K> {
                 match deferred_op {
                     DeferredOp::Classic(ctx) => {
                         self.write_iv_registers(&self.iv.get());
-                        self.iv.set([0; AES128_IV_SIZE]);
+                        self.iv.set([0; AES_IV_SIZE]);
                         self.start_classic_crypt(ctx);
                     }
                     DeferredOp::WriteIvx => {
                         self.write_iv_registers(&self.iv.get());
-                        self.iv.set([0; AES128_IV_SIZE]);
+                        self.iv.set([0; AES_IV_SIZE]);
                         self.state.set(State::Idle);
                     }
                     DeferredOp::None => {
@@ -525,7 +525,7 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Aes<'a
     }
 
     fn set_iv(&self, iv: &[u8]) -> Result<(), ErrorCode> {
-        if iv.len() != AES128_IV_SIZE {
+        if iv.len() != AES_IV_SIZE {
             return Err(ErrorCode::INVAL);
         }
 

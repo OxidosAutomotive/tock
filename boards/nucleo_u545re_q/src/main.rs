@@ -6,6 +6,7 @@
 #![no_std]
 #![no_main]
 
+use capsules_core::test::capsule_test::CapsuleTest;
 use kernel::capabilities;
 use kernel::component::Component;
 use kernel::debug::PanicResources;
@@ -159,11 +160,15 @@ unsafe fn start() -> (
         stm32u545::aes::Aes<'static, AES256>,
         stm32u545::aes::Aes::new(stm32u545::aes::AES_BASE)
     );
+    let saes = static_init!(
+        stm32u545::saes::Saes<'static, AES256>,
+        stm32u545::saes::Saes::new(stm32u545::saes::SAES_BASE)
+    );
 
     // Load Peripherals Bundle
     let periphs = static_init!(
         stm32u545::chip::Stm32u5xxDefaultPeripherals<'static>,
-        stm32u545::chip::Stm32u5xxDefaultPeripherals::new(usart1, exti, dma1, aes)
+        stm32u545::chip::Stm32u5xxDefaultPeripherals::new(usart1, exti, dma1, aes, saes)
     );
 
     // Initialize wiring (DMA, clocks)
@@ -262,6 +267,25 @@ unsafe fn start() -> (
     ));
 
     aes.set_client(aes_driver);
+
+    let aes_cbc_key = static_init!([u8; 32], [0; 32]);
+    let aes_cbc_iv = static_init!([u8; 16], [0; 16]);
+    let aes_cbc_src = static_init!([u8; 64], [0; 64]);
+    let aes_cbc_dst = static_init!([u8; 96], [0; 96]);
+    let aes_cbc_test = static_init!(
+        capsules_extra::test::aes256::TestAES256Cbc<'static, stm32u545::aes::Aes<'static, AES256>>,
+        capsules_extra::test::aes256::TestAES256Cbc::new(
+            aes,
+            aes_cbc_key,
+            aes_cbc_iv,
+            aes_cbc_src,
+            aes_cbc_dst,
+            true
+        )
+    );
+    saes.set_client(aes_cbc_test);
+
+    aes_cbc_test.run();
 
     // Platform and Interrupts
     let platform = static_init!(

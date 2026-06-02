@@ -7,9 +7,7 @@ use crate::aes::{AESMode, Aes, CryptoContext, DeferredOp, State};
 use crate::dma::ChannelId;
 use crate::dma::Dma;
 use crate::dma::DmaPeripheral;
-use kernel::hil::symmetric_encryption::{
-    AESKeySize, GCMClient, AES, AES128_IV_SIZE, AES_BLOCK_SIZE,
-};
+use kernel::hil::symmetric_encryption::{AESKeySize, GCMClient, AES, AES_BLOCK_SIZE, AES_IV_SIZE};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::ErrorCode;
 
@@ -683,9 +681,9 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AESGCM<'a, K> for Aes
         if self.registers.cr.any_matching_bits_set(Control::EN::SET) {
             return Err(ErrorCode::BUSY);
         }
-        let mut full_gcm_iv = [0u8; AES128_IV_SIZE];
+        let mut full_gcm_iv = [0u8; AES_IV_SIZE];
         full_gcm_iv[..nonce.len()].copy_from_slice(nonce);
-        full_gcm_iv[12..AES128_IV_SIZE].copy_from_slice(&2u32.to_be_bytes());
+        full_gcm_iv[12..AES_IV_SIZE].copy_from_slice(&2u32.to_be_bytes());
         AES::set_iv(self, &full_gcm_iv)?;
 
         self.registers.cr.modify(Control::EN::SET);
@@ -763,7 +761,7 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AESCCM<'a, K> for Aes
         }
 
         // save nonce length in iv[0]
-        let mut iv = [0u8; AES128_IV_SIZE];
+        let mut iv = [0u8; AES_IV_SIZE];
         iv[0] = nonce.len() as u8;
         iv[1..nonce.len() + 1].copy_from_slice(nonce);
         self.iv.set(iv);
@@ -817,7 +815,7 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AESCCM<'a, K> for Aes
         let m_len_bytes = (m_len as u64).to_be_bytes();
 
         // Q
-        iv[iv_len + 1..AES128_IV_SIZE].copy_from_slice(&m_len_bytes[(8 - q_len)..]);
+        iv[iv_len + 1..AES_IV_SIZE].copy_from_slice(&m_len_bytes[(8 - q_len)..]);
 
         // write IV to registers
         self.write_iv_registers(&iv);

@@ -4,17 +4,17 @@
 // Copyright OxidOS Automotive 2026.
 
 use crate::dma::{ChannelId, Dma};
-use crate::gpio;
 use crate::nvic::{
     AES_IRQ, EXTI13_IRQ, GPDMA1_CH0_IRQ, GPDMA1_CH10_IRQ, GPDMA1_CH11_IRQ, GPDMA1_CH12_IRQ,
     GPDMA1_CH13_IRQ, GPDMA1_CH14_IRQ, GPDMA1_CH15_IRQ, GPDMA1_CH1_IRQ, GPDMA1_CH2_IRQ,
     GPDMA1_CH3_IRQ, GPDMA1_CH4_IRQ, GPDMA1_CH5_IRQ, GPDMA1_CH6_IRQ, GPDMA1_CH7_IRQ, GPDMA1_CH8_IRQ,
-    GPDMA1_CH9_IRQ, TIM2_IRQ, USART1_IRQ,
+    GPDMA1_CH9_IRQ, SAES_IRQ, TIM2_IRQ, USART1_IRQ,
 };
 use crate::rcc;
 use crate::tim;
 use crate::usart;
 use crate::{aes, exti};
+use crate::{gpio, saes};
 
 use core::fmt::Write;
 use kernel::hil::symmetric_encryption::AES256;
@@ -36,6 +36,7 @@ pub struct Stm32u5xxDefaultPeripherals<'a> {
     pub gpio_a: gpio::Port<'a>,
     pub gpio_c: gpio::Port<'a>,
     pub aes: &'a aes::Aes<'a, AES256>,
+    pub saes: &'a saes::Saes<'a, AES256>,
 }
 
 fn enable_tim2_clock() {
@@ -49,6 +50,7 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
         exti: &'a exti::Exti<'a>,
         dma1: &'a Dma,
         aes: &'a aes::Aes<'a, AES256>,
+        saes: &'a saes::Saes<'a, AES256>,
     ) -> Self {
         Self {
             rcc: rcc::Rcc::new(rcc::RCC_BASE),
@@ -59,6 +61,7 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
             gpio_a: gpio::Port::new(gpio::GPIO_A_BASE, exti, gpio::GpioPort::PortA),
             gpio_c: gpio::Port::new(gpio::GPIO_C_BASE, exti, gpio::GpioPort::PortC),
             aes,
+            saes,
         }
     }
 
@@ -69,6 +72,7 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
         self.rcc.enable_gpioc();
         self.rcc.enable_usart1();
         self.rcc.enable_aes();
+        self.rcc.enable_saes();
         self.rcc.enable_syscfg();
         self.rcc.set_usart1_source_pclk();
         // Link DMA to USART1
@@ -174,6 +178,10 @@ impl InterruptService for Stm32u5xxDefaultPeripherals<'_> {
             }
             AES_IRQ => {
                 self.aes.handle_interrupt();
+                true
+            }
+            SAES_IRQ => {
+                self.saes.handle_interrupt();
                 true
             }
             _ => false,

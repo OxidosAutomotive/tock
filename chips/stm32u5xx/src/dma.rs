@@ -27,6 +27,8 @@ const GPDMA_REQ_USART1_TX: u32 = 25;
 const GPDMA_REQ_HASH_IN: u32 = 89;
 const GPDMA_REQ_AES_IN: u32 = 87;
 const GPDMA_REQ_AES_OUT: u32 = 88;
+const GPDMA_REQ_SAES_IN: u32 = 103;
+const GPDMA_REQ_SAES_OUT: u32 = 104;
 
 /// Base address for AES in Secure Alias mode.
 const AES_BASE_ADDR: u32 = 0x520C0000;
@@ -34,6 +36,13 @@ const AES_BASE_ADDR: u32 = 0x520C0000;
 const AES_DINR: u32 = AES_BASE_ADDR + 0x08;
 /// AES Data Output Register (DOUTR) address.
 const AES_DOUTR: u32 = AES_BASE_ADDR + 0x0C;
+
+/// Base address for AES in Secure Alias mode.
+const SAES_BASE_ADDR: u32 = 0x520C0C00;
+/// AES Data Input Register (DINR) address.
+const SAES_DINR: u32 = AES_BASE_ADDR + 0x08;
+/// AES Data Output Register (DOUTR) address.
+const SAES_DOUTR: u32 = AES_BASE_ADDR + 0x0C;
 
 register_bitfields! [
     u32,

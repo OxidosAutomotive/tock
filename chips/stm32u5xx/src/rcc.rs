@@ -47,6 +47,7 @@ register_bitfields![u32,
         GPIOIEN OFFSET(8) NUMBITS(1) [],
         GPIOJEN OFFSET(9) NUMBITS(1) [],
         AESEN   OFFSET(16) NUMBITS(1) [],
+        SAESEN  OFFSET(20) NUMBITS(1) [],
     ],
     pub APB1ENR1 [
         TIM2EN OFFSET(0) NUMBITS(1) []
@@ -101,6 +102,10 @@ impl Rcc {
     }
 
     pub fn enable_aes(&self) {
+        self.registers.ahb2enr1.modify(AHB2ENR1::AESEN::SET);
+    }
+
+    pub fn enable_saes(&self) {
         self.registers.ahb2enr1.modify(AHB2ENR1::AESEN::SET);
     }
 
