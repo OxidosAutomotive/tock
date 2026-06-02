@@ -128,6 +128,8 @@ impl<
                         .and_then(|key| {
                             key.enter(|k| {
                                 if let Some(op) = &app.sha_operation {
+                                    // NOTE(frihetselsker) Is it a good idea to create a static array here?
+                                    // I see only one solution since I can pass only static references
                                     let mut tmp_key_buffer: [u8; TMP_KEY_BUFFER_SIZE] =
                                         [0; TMP_KEY_BUFFER_SIZE];
                                     let key_len = core::cmp::min(k.len(), TMP_KEY_BUFFER_SIZE);
