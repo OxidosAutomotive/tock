@@ -10,6 +10,8 @@ use kernel::utilities::registers::{
 
 use kernel::utilities::StaticRef;
 
+use crate::saes::CR::KEYSIZE::{AES128, AES256};
+
 register_structs! {
     /// Secure AES coprocessor
     pub SaesRegisters {
@@ -190,32 +192,56 @@ enum State {
     Idle,
     KeyPreparation(DeferredOp),
     Crypt(CryptoContext),
+    KeyWrapping,
 }
 
-pub struct Saes<'a, K: AESKeySize> {
+pub enum WrappedKeyType {
+    DHUK,
+    BHK,
+    XORK,
+}
+
+pub struct SharedKey<K: AESKeySize, const KEY_LEN: usize> {
+    key: [u8; KEY_LEN],
+    key_type: WrappedKeyType,
+    _phantom: PhantomData<K>,
+}
+
+impl<K: AESKeySize, const KEY_LEN: usize> SharedKey<K, KEY_LEN> {
+    pub fn new() {
+        assert_eq!(K::LENGTH, KEY_LEN);
+    }
+}
+
+pub trait SharedKeyClient<K: AESKeySize, const KEY_LEN: usize> {
+    fn wrapping_done(&self, shared_key: SharedKey<K, KEY_LEN>);
+}
+
+pub struct Saes<'a, K: AESKeySize, const KEY_LEN: usize> {
     registers: StaticRef<SaesRegisters>,
     mode: Cell<SAESMode>,
     state: Cell<State>,
     encrypting: Cell<bool>,
     client: OptionalCell<&'a dyn kernel::hil::symmetric_encryption::Client<'a>>,
+    key_client: OptionalCell<&'a dyn SharedKeyClient<K, KEY_LEN>>,
     input: TakeCell<'static, [u8]>,
     output: TakeCell<'static, [u8]>,
     iv: Cell<[u8; AES_IV_SIZE]>,
-    _phantom: PhantomData<K>,
 }
 
-impl<'a, K: AESKeySize> Saes<'a, K> {
-    pub const fn new(base: StaticRef<SaesRegisters>) -> Saes<'a, K> {
+impl<'a, K: AESKeySize, const KEY_LEN: usize> Saes<'a, K, KEY_LEN> {
+    pub fn new(base: StaticRef<SaesRegisters>) -> Saes<'a, K, KEY_LEN> {
+        assert_eq!(K::LENGTH, KEY_LEN);
         Saes {
             registers: base,
             mode: Cell::new(SAESMode::ECB),
             encrypting: Cell::new(true),
             state: Cell::new(State::Idle),
             client: OptionalCell::empty(),
+            key_client: OptionalCell::empty(),
             input: TakeCell::empty(),
             output: TakeCell::empty(),
             iv: Cell::new([0; AES_IV_SIZE]),
-            _phantom: PhantomData::<K>,
         }
     }
 
@@ -381,9 +407,56 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
                     self.write_input(ctx);
                 }
             }
+            State::KeyWrapping => {}
             _ => {}
         }
     }
+
+    ///////////////////////////////////////////
+
+    pub fn wrap_key(&self, key: &[u8], option_iv: Option<&[u8]>) -> Result<(), ErrorCode> {
+        let regs = self.registers;
+        if regs.sr.any_matching_bits_set(SR::BUSY::SET)
+            || regs.cr.any_matching_bits_set(CR::EN::SET)
+        {
+            return Err(ErrorCode::BUSY);
+        }
+
+        if self.state.get() != State::Idle {
+            return Err(ErrorCode::BUSY);
+        }
+
+        match K::LENGTH {
+            16 => {
+                regs.cr.modify(CR::KEYSIZE::AES128);
+            }
+            32 => {
+                regs.cr.modify(CR::KEYSIZE::AES256);
+            }
+            _ => return Err(ErrorCode::INVAL),
+        }
+        self.state.set(State::KeyWrapping);
+        regs.cr.modify(CR::MODE::Encrypt + CR::KMOD::WRAPPED);
+        if let Some(iv) = option_iv {
+            if iv.len() != AES_IV_SIZE {
+                self.state.set(State::Idle);
+                return Err(ErrorCode::INVAL);
+            }
+            regs.cr.modify(CR::CHMOD::CBC);
+            self.write_iv_registers(iv.try_into().unwrap());
+        } else {
+            regs.cr.modify(CR::CHMOD::ECB);
+        }
+        regs.cr.modify(CR::EN::SET);
+
+        Ok(())
+    }
+
+    pub fn set_client(&'a self, client: &'a dyn SharedKeyClient<K, KEY_LEN>) {
+        self.key_client.set(client);
+    }
+
+    ///////////////////////////////////////////
 
     pub fn handle_interrupt(&self) {
         if self.registers.isr.is_set(ISR::CCF) {
@@ -405,7 +478,9 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
     }
 }
 
-impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'a, K> {
+impl<'a, K: AESKeySize, const KEY_LEN: usize> kernel::hil::symmetric_encryption::AES<'a, K>
+    for Saes<'a, K, KEY_LEN>
+{
     fn enable(&self) {
         self.registers.cr.modify(CR::IPRST::SET);
         self.registers.cr.write(CR::EN::CLEAR);
@@ -533,7 +608,9 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
     }
 }
 
-impl<K: AESKeySize> kernel::hil::symmetric_encryption::AESECB for Saes<'_, K> {
+impl<K: AESKeySize, const KEY_LEN: usize> kernel::hil::symmetric_encryption::AESECB
+    for Saes<'_, K, KEY_LEN>
+{
     fn set_mode_aesecb(&self, encrypting: bool) -> Result<(), ErrorCode> {
         self.mode.set(SAESMode::ECB);
         self.registers.cr.modify(CR::CHMOD::ECB);
@@ -542,7 +619,9 @@ impl<K: AESKeySize> kernel::hil::symmetric_encryption::AESECB for Saes<'_, K> {
     }
 }
 
-impl<K: AESKeySize> kernel::hil::symmetric_encryption::AESCBC for Saes<'_, K> {
+impl<K: AESKeySize, const KEY_LEN: usize> kernel::hil::symmetric_encryption::AESCBC
+    for Saes<'_, K, KEY_LEN>
+{
     fn set_mode_aescbc(&self, encrypting: bool) -> Result<(), ErrorCode> {
         self.mode.set(SAESMode::CBC);
         self.registers.cr.modify(CR::CHMOD::CBC);
