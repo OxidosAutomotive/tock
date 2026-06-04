@@ -1,3 +1,7 @@
+// Licensed under the Apache License, Version 2.0 or the MIT License.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright OxidOS Automotive 2026.
+
 use core::cell::Cell;
 use core::cmp::min;
 use core::ops::Index;
@@ -200,7 +204,6 @@ impl Leftover {
     }
 
     pub fn add(&self, byte: u8) {
-        // debug!("Leftover: add new byte");
         if !self.is_full() {
             self.buffer.update(|buf| Leftover::add_byte(buf, byte));
         } else {
@@ -208,29 +211,13 @@ impl Leftover {
                 .update(|buf| Leftover::add_byte(buf, byte));
         }
 
-        // match self.buffer.get() {
-        //     Some(buf) => debug!("Leftover: current buffer: 0x{:02x}", buf),
-        //     _ => debug!("Leftover: current buffer not exist"),
-        // }
-
-        // match self.secondary_buffer.get() {
-        //     Some(buf) => debug!("Leftover: current 2ndary buffer: 0x{:02x}", buf),
-        //     _ => debug!("Leftover: current 2ndary buffer not exist"),
-        // }
-
         self.index.update(|index| (index + 1) % 8);
-        // debug!("Leftover: current index {}", self.index.get());
     }
 
     pub fn to_le(&self) -> u32 {
-        // debug!("Leftover: entered to_le");
         let res = match self.buffer.take() {
             Some(b) => {
-                // debug!("Leftover: value before shifting: 0x{:02x}", b);
                 let value = b >> (8 * self.bytes_left());
-                // CRITICAL: This is a bug!!!!
-                // UPD: Fixed
-                // debug!("Leftover: value written to the register: 0x{:02x}", value);
                 self.index.update(|idx| idx.saturating_sub(4));
                 if self.secondary_buffer.get().is_some() {
                     self.buffer.set(self.secondary_buffer.take());
@@ -299,12 +286,6 @@ impl<'a> HmacKey<'a> {
         }
     }
 
-    pub fn prepare_key(&self) {
-        if let Some(mut key) = self.key.get() {
-            key.reset();
-        }
-    }
-
     pub fn left_to_load(&self) -> usize {
         if let Some(key) = self.key.get() {
             key.len()
@@ -338,9 +319,8 @@ pub struct Hash<'a> {
     leftover: Leftover,
     verify: Cell<bool>,
     // How to be more flexible in this field?
+    // THIS IS CRITICAL
     client: OptionalCell<&'a dyn Client<MAX_DIGEST_LEN>>,
-    // NOTE(frihetselsker): I don't believe it is the best way to store it without explicitly mentioning the size
-    // But without it, we lose flexibility in switching modes during the execution.
     digest: OptionalCell<&'static mut [u8; MAX_DIGEST_LEN]>, // Maximum length that can be used
     deferred_call: DeferredCall,
 }
@@ -354,12 +334,11 @@ impl<'a> Hash<'a> {
     }
 
     // TODO(frihetselsker): Think about the return type
-    fn start_dma_transfer(&self, dma: &'a Dma) -> Result<(), Option<SubSliceMutImmut<'a, u8>>> {
+    fn start_dma_transfer(&self, dma: &'a Dma) -> Result<(), ()> {
         if let Some(mut data) = self.data.take() {
             let mut can_start = true;
             if !self.leftover.is_empty() {
                 let (count, start) = self.trim_subslice(&data, data.len());
-                // debug!("DMA-SHA: Trimmed {} bytes", count);
                 data.slice(count..);
                 if let Some(s) = start {
                     can_start = s;
@@ -367,7 +346,6 @@ impl<'a> Hash<'a> {
             }
             // Truncate
             let count = self.truncate_subslice(&data, data.len());
-            // debug!("DMA-SHA: Truncated {} bytes", count);
             data.slice(..data.len() - count);
             if data.len() == 0 {
                 if can_start {
@@ -376,71 +354,50 @@ impl<'a> Hash<'a> {
                 return Ok(());
             }
 
-            // Hardware fence
-            let fence = unsafe { CortexMDmaFence::new() };
-            // Convert subslice into DmaSlice
-            // let dma_slice = DmaSubSliceMut::new_static(data, fence);
-            let (dma_slice, ptr, len) = match data {
-                SubSliceMutImmut::Immutable(d) => {
-                    let dma_slice = DmaSubSlice::new(d, fence);
-                    // Extract the physical pointer and length for MMIO
-                    let ptr = dma_slice.as_ptr() as u32;
-                    let len = dma_slice.len() as u32;
-                    (DmaSubSliceMutImmut::Immutable(dma_slice), ptr, len)
-                }
-                SubSliceMutImmut::Mutable(d) => {
-                    let dma_slice = unsafe { DmaSubSliceMut::new(d, fence) };
-                    // Extract the physical pointer and length for MMIO
-                    let ptr = dma_slice.as_mut_ptr() as u32;
-                    let len = dma_slice.len() as u32;
-                    (DmaSubSliceMutImmut::Mutable(dma_slice), ptr, len)
-                }
-            };
-
-            debug!("DMA-SHA: DMA transfer length: {} bytes", len);
-
             // Trigger HASH
             if let Some(ch) = self.dma_channel.get() {
                 let regs = self.regs;
+                // Hardware fence
+                // Load data only if we have a channel
+                // Otherwise, it is meaningless
+                let fence = unsafe { CortexMDmaFence::new() };
+                // Convert subslice into DmaSlice
+                let (dma_slice, ptr, len) = match data {
+                    SubSliceMutImmut::Immutable(d) => {
+                        let dma_slice = DmaSubSlice::new(d, fence);
+                        // Extract the physical pointer and length for MMIO
+                        let ptr = dma_slice.as_ptr() as u32;
+                        let len = dma_slice.len() as u32;
+                        (DmaSubSliceMutImmut::Immutable(dma_slice), ptr, len)
+                    }
+                    SubSliceMutImmut::Mutable(d) => {
+                        let dma_slice = unsafe { DmaSubSliceMut::new(d, fence) };
+                        // Extract the physical pointer and length for MMIO
+                        let ptr = dma_slice.as_mut_ptr() as u32;
+                        let len = dma_slice.len() as u32;
+                        (DmaSubSliceMutImmut::Mutable(dma_slice), ptr, len)
+                    }
+                };
                 // Save DmaSlice in the struct
                 self.dma_buffer.replace(dma_slice);
                 dma.setup(ch, crate::dma::DmaPeripheral::Hash, ptr, len);
 
                 // TODO(frihetselsker): I should consider checking the buffer emptiness
                 // In the case of fullness, the interrupt should be set
-                //
-                // SOmething fishy is here, I need to take a look here
-                // TODO(frihetselsker)!@!!!!!!!!!!
+
                 regs.imr.modify(IMR::DINIE::SET);
 
                 if can_start {
                     regs.cr.modify(CR::DMAE::SET);
                 }
-                // So, apparently, DMA doesn't work for the key...
-                // I will still explore other solutions that I can come up with
-                //
-                // AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
                 Ok(())
             } else {
-                debug!("DMA-SHA: couldn't take a ch");
-                let f = unsafe { CortexMDmaFence::new() };
-                match dma_slice {
-                    DmaSubSliceMutImmut::Immutable(d) => {
-                        let mut buf = d.as_sub_slice();
-                        buf.reset();
-                        Err(Some(SubSliceMutImmut::Immutable(buf)))
-                    }
-                    DmaSubSliceMutImmut::Mutable(d) => {
-                        let mut buf = unsafe { d.take(f) };
-                        buf.reset();
-                        Err(Some(SubSliceMutImmut::Mutable(buf)))
-                    }
-                }
+                Err(())
             }
         } else {
-            debug!("DMA-SHA: couldn't take data");
-            Err(None)
+            // No data found
+            Err(())
         }
     }
 }
@@ -467,37 +424,28 @@ impl Hash<'_> {
     pub fn handle_interupts(&self) {
         let regs = self.regs;
 
-        if let Some(state) = self.state.get() {
-            debug!("Current state is {:?}", state);
-        }
         // Disable all the interrupts
-
         regs.imr.modify(IMR::DCIE::CLEAR + IMR::DINIE::CLEAR);
-        // Digest Calculation completed?
-        if regs.sr.read(SR::DCIS) != 0 {
-            debug!("SHA: Entered Digest Calculation interrupt");
-            if let Some(state) = self.state.get() {
+
+        if let Some(state) = self.state.get() {
+            // Digest Calculation completed?
+            if regs.sr.read(SR::DCIS) != 0 {
                 // If key is present, then we need to process it accordingly
                 match state {
                     State::HmacFinalize | State::Run => {
                         // it is time to return data
-                        // reset index
-                        // self.hmac_key_index.take();
                         self.return_data();
                     }
                     _ => (),
                 }
-            }
-        } else if regs.sr.read(SR::DINIS) != 0 {
-            debug!("SHA: Entered Data Input interrupt");
-            if let Some(state) = self.state.get() {
+            } else if regs.sr.read(SR::DINIS) != 0 {
                 match state {
                     State::Add => {
                         if self.dma.is_some() {
                             // Theoretically, there can be a situation
                             // when the FIFO is already filled, but we do need to write leftovers
                             // The DMA transfer cannot be used until all the previous data is loaded
-                            // to the peripheral.
+                            // to the peripheral so that calculated hash is not corrupted.
                             if self.leftover.is_full() {
                                 regs.din.set(self.leftover.to_le());
                                 // It is the appropriate moment to start the DMA transfer
@@ -512,9 +460,6 @@ impl Hash<'_> {
                         }
                     }
                     State::HmacInit => {
-                        // Just in case, but it should not enter it here.
-                        // TODO(frihetselsker): think of it
-
                         self.load_key(true);
                     }
                     State::HmacPostAuth | State::Run => {
@@ -523,17 +468,14 @@ impl Hash<'_> {
                     State::HmacPreAuth => {
                         self.state.set(Some(State::Add));
                         self.hmac_key.is_loaded.set(Some(true));
-                        debug!("It is time to write the actual data");
 
                         if let Some(dma) = self.dma.get() {
                             let _ = self.start_dma_transfer(dma);
                         } else {
                             if !self.data_progress() {
                                 // we added all the data
-                                debug!("we added all the data");
                                 self.deferred_call.set();
                             } else {
-                                debug!("we need more data");
                                 regs.imr.modify(IMR::DINIE::SET);
                             }
                         }
@@ -548,34 +490,27 @@ impl Hash<'_> {
         // Disable the DMA trigger to release the channel
         let regs = self.regs;
         regs.cr.modify(CR::DMAE::CLEAR);
-        debug!("DMA-INT: entered the DMA handler");
         if let Some(dma_slice) = self.dma_buffer.take() {
-            if let Some(state) = self.state.get() {
-                debug!("DMA-INT: current state {:?}", state);
-                match state {
-                    State::Add => {
-                        self.state.take();
-                        match dma_slice {
-                            DmaSubSliceMutImmut::Immutable(b) => {
-                                let mut subslice = b.as_sub_slice();
-                                // ugly line of code
-                                subslice.slice(0..0);
-                                self.client.map(|client| {
-                                    client.add_data_done(Ok(()), subslice);
-                                });
-                            }
-                            DmaSubSliceMutImmut::Mutable(b) => {
-                                let fence = unsafe { CortexMDmaFence::new() };
-                                let mut subslice = unsafe { b.take(fence) };
-                                // ugly line of code
-                                subslice.slice(0..0);
-                                self.client.map(|client| {
-                                    client.add_mut_data_done(Ok(()), subslice);
-                                });
-                            }
-                        }
+            if let Some(State::Add) = self.state.get() {
+                self.state.take();
+                match dma_slice {
+                    DmaSubSliceMutImmut::Immutable(b) => {
+                        let mut subslice = b.as_sub_slice();
+                        // ugly line of code
+                        subslice.slice(0..0);
+                        self.client.map(|client| {
+                            client.add_data_done(Ok(()), subslice);
+                        });
                     }
-                    _ => (),
+                    DmaSubSliceMutImmut::Mutable(b) => {
+                        let fence = unsafe { CortexMDmaFence::new() };
+                        let mut subslice = unsafe { b.take(fence) };
+                        // ugly line of code
+                        subslice.slice(0..0);
+                        self.client.map(|client| {
+                            client.add_mut_data_done(Ok(()), subslice);
+                        });
+                    }
                 }
             }
         }
@@ -585,7 +520,6 @@ impl Hash<'_> {
         self.client.map(|client| {
             let regs = self.regs;
             let digest = self.digest.take().unwrap();
-            //debug!("SHA: Entered interrupt related to digest calculation");
             // We need to compare the result with the digest received before.
             // If there is no operation, we react in no manner.
             if let Some(mode) = self.mode.get() {
@@ -611,7 +545,7 @@ impl Hash<'_> {
                     }
 
                     // self.clear_data();
-                    // NOTE(frihetselsker): I am not sure that this clears the whole internal FIFO, but we will see.
+                    // This resets the peripheral
                     regs.cr.modify(CR::INIT::SET);
                     self.state.take();
                     if self.hmac_key.is_stored() {
@@ -653,7 +587,6 @@ impl Hash<'_> {
 
     fn process(&self, data: &dyn Index<usize, Output = u8>, count: usize) -> usize {
         let regs = self.regs;
-        // debug!("SHA: current last_index: {}", regs.sr.read(SR::NBWP));
         let words_num = count / 4;
         for i in 0..words_num {
             if regs.sr.read(SR::NBWE) == 0 {
@@ -667,26 +600,23 @@ impl Hash<'_> {
                 data[data_idx + 2],
                 data[data_idx + 3],
             ]);
-            // debug!("SHA: 32-bit word written {:02x}", d);
             regs.din.set(d);
         }
 
         if !count.is_multiple_of(4) {
-            // debug!("SHA: Adding 8-bit words as leftovers");
-
             for i in 0..(count % 4) {
                 if regs.sr.read(SR::NBWE) == 0 {
+                    // 'buffer is full', peripheral says
                     return i + words_num;
                 }
                 let data_idx = (count - (count % 4)) + i;
                 // d |= (data[data_idx] as u32) << (8 * i);
-                // debug!("SHA: Byte 0x{:02x}", data[data_idx]);
                 self.leftover.add(data[data_idx]);
+                // We can add checks here if it is full and constantly poll
+                // But will it save clock cycles -> No!
             }
+            //
             if self.leftover.is_full() {
-                // let new_word = self.leftover.to_le();
-                // debug!("SHA: Leftover word written {:02x}", new_word);
-                // debug!("SHA: Current index: {}", self.leftover.index.get());
                 regs.din.set(self.leftover.to_le());
             }
         }
@@ -701,7 +631,6 @@ impl Hash<'_> {
     ) -> (usize, Option<bool>) {
         let bytes_written = min(self.leftover.bytes_left(), count % 4);
         let mut is_write_successful = None;
-        // debug!("Trim_subslice: writing {} bytes", bytes_written);
         for data_idx in 0..bytes_written {
             self.leftover.add(data[data_idx]);
         }
@@ -712,6 +641,7 @@ impl Hash<'_> {
                 is_write_successful = Some(false);
             } else {
                 regs.din.set(self.leftover.to_le());
+                // Leftover was written successfully
                 is_write_successful = Some(true);
             }
         }
@@ -731,24 +661,18 @@ impl Hash<'_> {
     // Return true if processing more data, false if the buffer
     // is completely processed.
     fn data_progress(&self) -> bool {
-        // debug!("data_progress");
         self.data.take().is_some_and(|buf| match buf {
             SubSliceMutImmut::Immutable(mut b) => {
                 if b.len() == 0 {
                     self.data.set(Some(SubSliceMutImmut::Immutable(b)));
                     false
                 } else {
-                    // NOTE(frihetselsker): Look at leasable_buffer section in the docs.
-                    // debug!("Progress: any_leftover? {}", !self.leftover.is_empty());
                     if !self.leftover.is_empty() {
                         let (count, is_write_successful) = self.trim_subslice(&b, b.len());
                         b.slice(count..);
-                        // I don't know if there is any way to remove double checking
-                        if let Some(w) = is_write_successful {
-                            if !w {
-                                self.data.set(Some(SubSliceMutImmut::Immutable(b)));
-                                return true;
-                            }
+                        if let Some(false) = is_write_successful {
+                            self.data.set(Some(SubSliceMutImmut::Immutable(b)));
+                            return true;
                         }
                     }
                     let count = self.process(&b, b.len());
@@ -768,16 +692,12 @@ impl Hash<'_> {
                     self.data.set(Some(SubSliceMutImmut::Mutable(b)));
                     false
                 } else {
-                    // debug!("Progress: any_leftover? {}", !self.leftover.is_empty());
                     if !self.leftover.is_empty() {
                         let (count, is_write_successful) = self.trim_subslice(&b, b.len());
                         b.slice(count..);
-                        // I don't know if there is any way to remove double checking
-                        if let Some(w) = is_write_successful {
-                            if !w {
-                                self.data.set(Some(SubSliceMutImmut::Mutable(b)));
-                                return true;
-                            }
+                        if let Some(false) = is_write_successful {
+                            self.data.set(Some(SubSliceMutImmut::Mutable(b)));
+                            return true;
                         }
                     }
                     let count = self.process(&b, b.len());
@@ -799,13 +719,8 @@ impl Hash<'_> {
         if let Some(mut key) = self.hmac_key.key.get() {
             let count = self.process(&key, key.len());
             key.slice(count..);
-            // debug!("Key loader: Sent {} bytes", count);
 
             // Time to compute digest on it.
-            // debug!(
-            //     "Key loader: left to load {} bytes",
-            //     self.hmac_key.left_to_load()
-            // );
 
             if key.len() == 0 {
                 regs.imr.modify(IMR::DINIE::SET);
@@ -823,7 +738,6 @@ impl Hash<'_> {
                     }
                 });
                 // start the final digest calculation
-                // debug!("KEY-SHA: Start computation");
                 regs.str.modify(STR::DCAL::SET);
             } else {
                 // We need to process more
@@ -841,12 +755,11 @@ impl Hash<'_> {
 
     fn flush_leftover(&self) {
         let regs = self.regs;
-        // debug!(
-        //     // "SHA: this is what we write to NBLW: {}",
-        //     // ((4 - self.leftover.bytes_left()) * 8)
-        // );
         regs.str
             // NOTE(frihetselsker): This is AWFUL
+            // I think if there is a tradeoff for how to proceed here
+            // bytes_filled will create the same piece of code for other parts
+            // Let's leave it as-is for now
             .modify(STR::NBLW.val(((4 - self.leftover.bytes_left()) * 8) as u32));
         regs.din.set(self.leftover.to_le());
     }
@@ -871,33 +784,20 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
         let regs = self.regs;
         // set the padding
         // assume that we write bytes, not bit by bit
-        // Do I need to create a separate function?
-        // debug!(
-        //     // "RUN: Do we need to flush leftovers? {}",
-        //     // !self.leftover.is_empty()
-        // );
-        // debug!("RUN: leftover index {}", self.leftover.index.get());
         if !self.leftover.is_empty() {
-            // debug!("RUN: We have some leftovers here");
             self.flush_leftover();
         } else {
             regs.str.modify(STR::NBLW.val(0));
         }
         // enable the interrupt
-        //debug!("SHA: Enable the interrupt for digest finish");
         if self.hmac_key.is_stored() {
-            // debug!("RUN: HMAC interrupts");
             self.hmac_key.reset();
-            // debug!("RUN: Key length: {}", self.hmac_key.len());
             regs.imr.modify(IMR::DINIE::SET + IMR::DCIE::SET);
-            // regs.imr.modify(IMR::DCIE::SET);
         } else {
-            // debug!("RUN: simple interrupts");
             regs.imr.modify(IMR::DCIE::SET);
         }
-        // start the final digest calculation
-        // debug!("SHA: Start computation");
 
+        // start the final digest calculation
         regs.str.modify(STR::DCAL::SET);
         self.state.set(Some(State::Run));
         self.digest.set(digest);
@@ -909,7 +809,6 @@ impl<'a> DigestHash<'a, 32> for Hash<'a> {
 impl crate::dma::DmaClient for Hash<'_> {
     fn transfer_done(&self, channel: ChannelId) {
         if let Some(ch) = self.dma_channel.get() {
-            // debug!("DMA: Transfer done, ch: {:?}", ch);
             if ch == channel {
                 self.handle_dma_interrupt();
                 return;
@@ -942,7 +841,6 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
         if data.len() == 0 {
             return Err((ErrorCode::SIZE, data));
         }
-        // debug!("SHA: Entered SHA data adder");
 
         // If DMA is available, then do use it.
         if data.len() > self.regs.sr.read(SR::NBWE) as usize
@@ -954,14 +852,8 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
 
         self.data.set(Some(SubSliceMutImmut::Immutable(data)));
 
-        // debug!(
-        //     "HMAC-SHA: key_len {}, index {}",
-        //     self.hmac_key_len.get(),
-        //     self.hmac_key_index.get()
-        // );
         // If we have key and it is not loaded yet, do load it now
         if self.hmac_key.is_stored() && self.hmac_key.left_to_load() > 0 {
-            // debug!("HMAC-SHA: We need to load a key");
             self.state.set(Some(State::HmacInit));
             self.load_key(true);
         } else {
@@ -976,22 +868,22 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
                 // NEW IDEA: just append bytes on top of what you got, then take a slice which can be divided by 4, add it to the DMA buffer and pass the leftovers back
                 // The subslice has to be discarded
 
-                // Turn u8 to u32
-                // Prepare the buffer with slicing
                 // Trim from the beginning
                 // We must ensure that DMA receives size divisible by 4 (only 32-bit words)
                 match self.start_dma_transfer(dma) {
                     Ok(()) => return Ok(()),
-                    Err(_) => {}
+                    Err(()) => {
+                        if let Some(SubSliceMutImmut::Immutable(data)) = self.data.take() {
+                            // Should I change it?
+                            return Err((ErrorCode::FAIL, data));
+                        }
+                    }
                 }
             } else {
                 // Otherwise, act as usual
-                let ret = self.data_progress();
-                // Why do I need this variable here?
-                if ret {
+                if self.data_progress() {
                     self.regs.imr.modify(IMR::DINIE::SET);
                 } else {
-                    // debug!("SHA: No more data to add");
                     self.deferred_call.set();
                 }
             }
@@ -1019,7 +911,6 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
         if data.len() == 0 {
             return Err((ErrorCode::SIZE, data));
         }
-        debug!("SHA: Entered SHA data adder");
 
         // If DMA is available, then do use it.
         if data.len() > self.regs.sr.read(SR::NBWE) as usize
@@ -1031,18 +922,11 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
 
         self.data.set(Some(SubSliceMutImmut::Mutable(data)));
 
-        // debug!(
-        //     "HMAC-SHA: key_len {}, index {}",
-        //     self.hmac_key_len.get(),
-        //     self.hmac_key_index.get()
-        // );
         // If we have key and it is not loaded yet, do load it now
         if self.hmac_key.is_stored() && self.hmac_key.left_to_load() > 0 {
-            debug!("HMAC-SHA: We need to load a key");
             self.state.set(Some(State::HmacInit));
             self.load_key(true);
         } else {
-            debug!("Set ADD state");
             self.state.set(Some(State::Add));
 
             if let Some(dma) = self.dma.get() {
@@ -1059,16 +943,18 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
                 // We must ensure that DMA receives size divisible by 4 (only 32-bit words)
                 match self.start_dma_transfer(dma) {
                     Ok(()) => return Ok(()),
-                    Err(_) => {}
+                    Err(()) => {
+                        if let Some(SubSliceMutImmut::Mutable(data)) = self.data.take() {
+                            // Should I change it?
+                            return Err((ErrorCode::FAIL, data));
+                        }
+                    }
                 }
             } else {
                 // Otherwise, act as usual
-                let ret = self.data_progress();
-                // Why do I need this variable here?
-                if ret {
+                if self.data_progress() {
                     self.regs.imr.modify(IMR::DINIE::SET);
                 } else {
-                    // debug!("SHA: No more data to add");
                     self.deferred_call.set();
                 }
             }
@@ -1179,16 +1065,15 @@ impl HmacSha256<'static> for Hash<'static> {
         if self.state.get().is_some() {
             return Err(ErrorCode::BUSY);
         }
+        let regs = self.regs;
         self.mode.set(Some(Mode::SHA2_256));
-        debug!("Set mode: Key length: {}", key.len());
         self.hmac_key.set(key);
-        self.regs
-            .cr
+        regs.cr
             .modify(CR::ALGO::SHA2_256 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);
         if key.len() > LONG_HMAC_KEY_LEN {
-            self.regs.cr.modify(CR::LKEY::SET + CR::INIT::SET);
+            regs.cr.modify(CR::LKEY::SET + CR::INIT::SET);
         } else {
-            self.regs.cr.modify(CR::LKEY::CLEAR + CR::INIT::SET);
+            regs.cr.modify(CR::LKEY::CLEAR + CR::INIT::SET);
         }
 
         Ok(())
@@ -1309,7 +1194,6 @@ impl DeferredCallClient for Hash<'_> {
     fn handle_deferred_call(&self) {
         // we call deferred call only if we processed
         // all the data in one cycle without using interrupts
-        debug!("SHA: entered deferred call handler");
         self.state.take();
         self.client.map(|client| {
             self.data.take().map(|buf| match buf {

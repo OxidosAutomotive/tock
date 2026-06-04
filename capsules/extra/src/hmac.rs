@@ -119,7 +119,7 @@ impl<
         }
     }
 
-    fn run(&self) -> Result<(), ErrorCode> {
+    fn run(&'a self) -> Result<(), ErrorCode> {
         self.processid.map_or(Err(ErrorCode::RESERVE), |processid| {
             self.apps
                 .enter(processid, |app, kernel_data| {
@@ -133,21 +133,22 @@ impl<
                                     let mut tmp_key_buffer: [u8; TMP_KEY_BUFFER_SIZE] =
                                         [0; TMP_KEY_BUFFER_SIZE];
                                     let key_len = core::cmp::min(k.len(), TMP_KEY_BUFFER_SIZE);
+
                                     k[..key_len].copy_to_slice(&mut tmp_key_buffer[..key_len]);
-                                    Ok(())
+                                    // Ok(())
 
                                     // FIXME(frihetselsker)
-                                    // match op {
-                                    //     ShaOperation::Sha256 => self
-                                    //         .hmac
-                                    //         .set_mode_hmacsha256(&tmp_key_buffer[..key_len]),
-                                    //     ShaOperation::Sha384 => self
-                                    //         .hmac
-                                    //         .set_mode_hmacsha384(&tmp_key_buffer[..key_len]),
-                                    //     ShaOperation::Sha512 => self
-                                    //         .hmac
-                                    //         .set_mode_hmacsha512(&tmp_key_buffer[..key_len]),
-                                    // }
+                                    match op {
+                                        ShaOperation::Sha256 => self
+                                            .hmac
+                                            .set_mode_hmacsha256(&tmp_key_buffer[..key_len]),
+                                        ShaOperation::Sha384 => self
+                                            .hmac
+                                            .set_mode_hmacsha384(&tmp_key_buffer[..key_len]),
+                                        ShaOperation::Sha512 => self
+                                            .hmac
+                                            .set_mode_hmacsha512(&tmp_key_buffer[..key_len]),
+                                    }
                                 } else {
                                     Err(ErrorCode::INVAL)
                                 }

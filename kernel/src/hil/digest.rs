@@ -9,6 +9,11 @@ use crate::ErrorCode;
 use crate::utilities::leasable_buffer::SubSlice;
 use crate::utilities::leasable_buffer::SubSliceMut;
 
+const MD5_DIGEST_LEN: usize = 16;
+const SHA1_DIGEST_LEN: usize = 20;
+const SHA224_DIGEST_LEN: usize = 28;
+const SHA256_DIGEST_LEN: usize = 32;
+
 /// Implement this trait and use `set_client()` in order to receive callbacks
 /// when data has been added to a digest.
 ///
@@ -353,6 +358,7 @@ pub trait HmacSha512<'a> {
 
 // NOTE(frihetselsker): I don't know if it is needed, but for Nucleo this would be really great
 // if there are such functions
+// They directly control how bytes are swapped inside the peripheral
 
 pub trait Bit32Data {
     fn set_data_type_32_bit(&self) -> Result<(), ErrorCode>;
