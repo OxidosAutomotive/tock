@@ -23,7 +23,7 @@ pub struct TestHmacSha256<'a, H: digest::Digest<'a, 32>> {
     client: OptionalCell<&'static dyn CapsuleTestClient>,
 }
 
-impl<'a, H: digest::Digest<'a, 32> + HmacSha256<'a> + digest::Bit8Data> TestHmacSha256<'a, H> {
+impl<'a, H: digest::Digest<'a, 32> + HmacSha256 + digest::Bit8Data> TestHmacSha256<'a, H> {
     pub fn new(
         hmac: &'a H,
         key: &'static mut [u8],

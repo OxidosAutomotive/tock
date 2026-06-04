@@ -91,9 +91,9 @@ pub struct HmacDriver<'a, H: digest::Digest<'a, DIGEST_LEN>, const DIGEST_LEN: u
 impl<
         'a,
         H: digest::Digest<'a, DIGEST_LEN>
-            + digest::HmacSha256<'a>
-            + digest::HmacSha384<'a>
-            + digest::HmacSha512<'a>,
+            + digest::HmacSha256
+            + digest::HmacSha384
+            + digest::HmacSha512,
         const DIGEST_LEN: usize,
     > HmacDriver<'a, H, DIGEST_LEN>
 {
@@ -119,7 +119,7 @@ impl<
         }
     }
 
-    fn run(&'a self) -> Result<(), ErrorCode> {
+    fn run(&self) -> Result<(), ErrorCode> {
         self.processid.map_or(Err(ErrorCode::RESERVE), |processid| {
             self.apps
                 .enter(processid, |app, kernel_data| {
@@ -128,16 +128,12 @@ impl<
                         .and_then(|key| {
                             key.enter(|k| {
                                 if let Some(op) = &app.sha_operation {
-                                    // NOTE(frihetselsker) Is it a good idea to create a static array here?
-                                    // I see only one solution since I can pass only static references
                                     let mut tmp_key_buffer: [u8; TMP_KEY_BUFFER_SIZE] =
                                         [0; TMP_KEY_BUFFER_SIZE];
                                     let key_len = core::cmp::min(k.len(), TMP_KEY_BUFFER_SIZE);
 
                                     k[..key_len].copy_to_slice(&mut tmp_key_buffer[..key_len]);
-                                    // Ok(())
 
-                                    // FIXME(frihetselsker)
                                     match op {
                                         ShaOperation::Sha256 => self
                                             .hmac
@@ -256,9 +252,9 @@ impl<
 impl<
         'a,
         H: digest::Digest<'a, DIGEST_LEN>
-            + digest::HmacSha256<'a>
-            + digest::HmacSha384<'a>
-            + digest::HmacSha512<'a>,
+            + digest::HmacSha256
+            + digest::HmacSha384
+            + digest::HmacSha512,
         const DIGEST_LEN: usize,
     > digest::ClientData<DIGEST_LEN> for HmacDriver<'a, H, DIGEST_LEN>
 {
@@ -394,9 +390,9 @@ impl<
 impl<
         'a,
         H: digest::Digest<'a, DIGEST_LEN>
-            + digest::HmacSha256<'a>
-            + digest::HmacSha384<'a>
-            + digest::HmacSha512<'a>,
+            + digest::HmacSha256
+            + digest::HmacSha384
+            + digest::HmacSha512,
         const DIGEST_LEN: usize,
     > digest::ClientHash<DIGEST_LEN> for HmacDriver<'a, H, DIGEST_LEN>
 {
@@ -448,9 +444,9 @@ impl<
 impl<
         'a,
         H: digest::Digest<'a, DIGEST_LEN>
-            + digest::HmacSha256<'a>
-            + digest::HmacSha384<'a>
-            + digest::HmacSha512<'a>,
+            + digest::HmacSha256
+            + digest::HmacSha384
+            + digest::HmacSha512,
         const DIGEST_LEN: usize,
     > digest::ClientVerify<DIGEST_LEN> for HmacDriver<'a, H, DIGEST_LEN>
 {
@@ -501,9 +497,9 @@ impl<
 impl<
         'a,
         H: digest::Digest<'a, DIGEST_LEN>
-            + digest::HmacSha256<'a>
-            + digest::HmacSha384<'a>
-            + digest::HmacSha512<'a>,
+            + digest::HmacSha256
+            + digest::HmacSha384
+            + digest::HmacSha512,
         const DIGEST_LEN: usize,
     > SyscallDriver for HmacDriver<'a, H, DIGEST_LEN>
 {

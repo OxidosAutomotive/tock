@@ -314,46 +314,46 @@ pub trait Sha512 {
     fn set_mode_sha512(&self) -> Result<(), ErrorCode>;
 }
 
-pub trait HmacMd5<'a> {
+pub trait HmacMd5 {
     /// Call before adding data to perform HMACMd5
     ///
     /// The key used for the HMAC is passed to this function.
-    fn set_mode_hmacmd5(&self, key: &'a [u8]) -> Result<(), ErrorCode>;
+    fn set_mode_hmacmd5(&self, key: &[u8]) -> Result<(), ErrorCode>;
 }
 
-pub trait HmacSha1<'a> {
+pub trait HmacSha1 {
     /// Call before adding data to perform HMACSha1
     ///
     /// The key used for the HMAC is passed to this function.
-    fn set_mode_hmacsha1(&self, key: &'a [u8]) -> Result<(), ErrorCode>;
+    fn set_mode_hmacsha1(&self, key: &[u8]) -> Result<(), ErrorCode>;
 }
 
-pub trait HmacSha224<'a> {
+pub trait HmacSha224 {
     /// Call before adding data to perform HMACSha224
     ///
     /// The key used for the HMAC is passed to this function.
-    fn set_mode_hmacsha224(&self, key: &'a [u8]) -> Result<(), ErrorCode>;
+    fn set_mode_hmacsha224(&self, key: &[u8]) -> Result<(), ErrorCode>;
 }
 
-pub trait HmacSha256<'a> {
+pub trait HmacSha256 {
     /// Call before adding data to perform HMACSha256
     ///
     /// The key used for the HMAC is passed to this function.
-    fn set_mode_hmacsha256(&self, key: &'a [u8]) -> Result<(), ErrorCode>;
+    fn set_mode_hmacsha256(&self, key: &[u8]) -> Result<(), ErrorCode>;
 }
 
-pub trait HmacSha384<'a> {
+pub trait HmacSha384 {
     /// Call before adding data to perform HMACSha384
     ///
     /// The key used for the HMAC is passed to this function.
-    fn set_mode_hmacsha384(&self, key: &'a [u8]) -> Result<(), ErrorCode>;
+    fn set_mode_hmacsha384(&self, key: &[u8]) -> Result<(), ErrorCode>;
 }
 
-pub trait HmacSha512<'a> {
+pub trait HmacSha512 {
     /// Call before adding data to perform HMACSha512
     ///
     /// The key used for the HMAC is passed to this function.
-    fn set_mode_hmacsha512(&self, key: &'a [u8]) -> Result<(), ErrorCode>;
+    fn set_mode_hmacsha512(&self, key: &[u8]) -> Result<(), ErrorCode>;
 }
 
 // NOTE(frihetselsker): I don't know if it is needed, but for Nucleo this would be really great

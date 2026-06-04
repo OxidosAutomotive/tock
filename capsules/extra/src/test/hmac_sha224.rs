@@ -23,7 +23,7 @@ pub struct TestHmacSha224<'a, H: digest::Digest<'a, 32>> {
     client: OptionalCell<&'static dyn CapsuleTestClient>,
 }
 
-impl<'a, H: digest::Digest<'a, 32> + HmacSha224<'a>> TestHmacSha224<'a, H> {
+impl<'a, H: digest::Digest<'a, 32> + HmacSha224> TestHmacSha224<'a, H> {
     pub fn new(
         hmac: &'a H,
         key: &'static mut [u8],

@@ -17,7 +17,7 @@ use kernel::hil::digest::{
 };
 use kernel::utilities::cells::{MapCell, OptionalCell};
 use kernel::utilities::dma_slice::{DmaSubSlice, DmaSubSliceMut, DmaSubSliceMutImmut};
-use kernel::utilities::leasable_buffer::{SubSlice, SubSliceMutImmut};
+use kernel::utilities::leasable_buffer::SubSliceMutImmut;
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::utilities::registers::{
     register_bitfields, register_structs, ReadOnly, ReadWrite, WriteOnly,
@@ -149,6 +149,9 @@ pub const HASH_BASE: StaticRef<HashRegisters> =
 // SHA2-256 has the largest digest.
 const MAX_DIGEST_LEN: usize = 32;
 const LONG_HMAC_KEY_LEN: usize = 64;
+// It is an artificial limitation for compatibility with capsules.
+// Taken from boards::components::hmac
+const MAX_HMAC_KEY_LEN: usize = 512 / 8;
 
 #[derive(Clone, Copy)]
 enum Mode {
@@ -248,62 +251,68 @@ impl Leftover {
     }
 }
 
-pub struct HmacKey<'a> {
-    key: Cell<Option<SubSlice<'a, u8>>>,
-    is_loaded: Cell<Option<bool>>,
+pub struct HmacKey {
+    key: MapCell<[u8; MAX_HMAC_KEY_LEN]>,
+    index: Cell<usize>,
+    len: Cell<usize>,
 }
 
-impl<'a> HmacKey<'a> {
+impl HmacKey {
     pub fn new() -> Self {
         Self {
-            key: Cell::new(None),
-            is_loaded: Cell::new(None),
+            key: MapCell::empty(),
+            index: Cell::new(0),
+            len: Cell::new(0),
         }
     }
 
-    pub fn set(&self, key: &'a [u8]) {
-        self.key.set(Some(SubSlice::new(key)));
-        self.is_loaded.set(Some(false));
+    pub fn set(&self, key: &[u8]) -> Result<(), kernel::ErrorCode> {
+        if self.key.is_none() {
+            self.key.put([0u8; MAX_HMAC_KEY_LEN]);
+        }
+        match self.key.map(|buf| {
+            if buf.len() >= key.len() {
+                buf[..key.len()].copy_from_slice(key);
+                self.len.set(key.len());
+                Ok(())
+            } else {
+                Err(ErrorCode::SIZE)
+            }
+        }) {
+            // Ok(Some(_)) => Ok(()),
+            // Ok(None) => Err(kernel::ErrorCode::NOMEM),
+            // Err(e) => Err(e)
+            Some(r) => r,
+            None => Err(ErrorCode::NOMEM),
+        }
     }
 
     pub fn is_stored(&self) -> bool {
-        self.key.get().is_some()
+        self.key.is_some()
     }
 
     pub fn len(&self) -> usize {
-        if let Some(key) = self.key.get() {
-            key.len()
-        } else {
-            0
-        }
+        self.len.get()
     }
 
     pub fn is_loaded(&self) -> bool {
-        if let Some(loaded) = self.is_loaded.get() {
-            loaded
-        } else {
-            false
-        }
+        self.index.get() == self.len.get()
     }
 
     pub fn left_to_load(&self) -> usize {
-        if let Some(key) = self.key.get() {
-            key.len()
-        } else {
-            0
-        }
+        self.len.get().saturating_sub(self.index.get())
     }
 
     pub fn reset(&self) {
-        if let Some(mut key) = self.key.get() {
-            self.is_loaded.set(Some(false));
-            key.reset();
+        if self.key.is_some() {
+            self.index.take();
         }
     }
 
     pub fn clear(&self) {
-        self.is_loaded.set(None);
         self.key.take();
+        self.len.take();
+        self.index.take();
     }
 }
 
@@ -314,7 +323,7 @@ pub struct Hash<'a> {
     dma_buffer: MapCell<DmaSubSliceMutImmut<'static, u8>>,
     mode: Cell<Option<Mode>>,
     state: Cell<Option<State>>,
-    hmac_key: HmacKey<'static>,
+    hmac_key: HmacKey,
     data: Cell<Option<SubSliceMutImmut<'static, u8>>>,
     leftover: Leftover,
     verify: Cell<bool>,
@@ -336,6 +345,7 @@ impl<'a> Hash<'a> {
     // TODO(frihetselsker): Think about the return type
     fn start_dma_transfer(&self, dma: &'a Dma) -> Result<(), ()> {
         if let Some(mut data) = self.data.take() {
+            // NOTE: I think thsi mutable variable should be removed
             let mut can_start = true;
             if !self.leftover.is_empty() {
                 let (count, start) = self.trim_subslice(&data, data.len());
@@ -459,17 +469,19 @@ impl Hash<'_> {
                             }
                         }
                     }
-                    State::HmacInit => {
-                        self.load_key(true);
+                    State::HmacInit | State::HmacPostAuth => {
+                        self.load_key();
                     }
-                    State::HmacPostAuth | State::Run => {
-                        self.load_key(false);
+                    State::Run => {
+                        self.state.set(Some(State::HmacPostAuth));
+                        self.load_key();
                     }
                     State::HmacPreAuth => {
                         self.state.set(Some(State::Add));
-                        self.hmac_key.is_loaded.set(Some(true));
+                        // self.hmac_key.is_loaded.set(Some(true));
 
                         if let Some(dma) = self.dma.get() {
+                            // TODO(frihetselsker): handle result gracefully
                             let _ = self.start_dma_transfer(dma);
                         } else {
                             if !self.data_progress() {
@@ -544,12 +556,11 @@ impl Hash<'_> {
                         }
                     }
 
-                    // self.clear_data();
                     // This resets the peripheral
                     regs.cr.modify(CR::INIT::SET);
                     self.state.take();
                     if self.hmac_key.is_stored() {
-                        self.hmac_key.is_loaded.set(Some(false));
+                        self.hmac_key.reset();
                     }
                     self.verify.set(false);
                     client.verification_done(Ok(equal), digest);
@@ -570,6 +581,7 @@ impl Hash<'_> {
                         digest[idx + 3] = d[3];
                     }
                     // pad digest if needed
+                    // TODO: make it better in the sense we don't need to store client with
                     digest[(mode.get_digest_len() * 4)..MAX_DIGEST_LEN].fill(0);
 
                     // self.clear_data();
@@ -577,7 +589,7 @@ impl Hash<'_> {
                     // release the peripheral
                     self.state.take();
                     if self.hmac_key.is_stored() {
-                        self.hmac_key.is_loaded.set(Some(false));
+                        self.hmac_key.reset();
                     }
                     client.hash_done(Ok(()), digest);
                 }
@@ -714,52 +726,45 @@ impl Hash<'_> {
         })
     }
 
-    fn load_key(&self, is_inner: bool) {
+    fn load_key(&self) {
         let regs = self.regs;
-        if let Some(mut key) = self.hmac_key.key.get() {
-            let count = self.process(&key, key.len());
-            key.slice(count..);
 
-            // Time to compute digest on it.
+        self.hmac_key.key.map(|buf| {
+            let count = self.process(buf, self.hmac_key.left_to_load());
+            self.hmac_key.index.update(|idx| idx + count);
+        });
 
-            if key.len() == 0 {
-                regs.imr.modify(IMR::DINIE::SET);
-                if !self.leftover.is_empty() {
-                    self.flush_leftover();
-                }
+        // Time to compute digest on it.
 
-                self.hmac_key.is_loaded.set(Some(true));
-
-                self.state.update(|_| {
-                    if is_inner {
-                        Some(State::HmacPreAuth)
-                    } else {
-                        Some(State::HmacFinalize)
-                    }
-                });
-                // start the final digest calculation
-                regs.str.modify(STR::DCAL::SET);
-            } else {
-                // We need to process more
-                self.state.update(|_| {
-                    if is_inner {
-                        Some(State::HmacInit)
-                    } else {
-                        Some(State::HmacPostAuth)
-                    }
-                });
-                regs.imr.modify(IMR::DINIE::SET);
+        if self.hmac_key.left_to_load() == 0 {
+            regs.imr.modify(IMR::DINIE::SET);
+            if !self.leftover.is_empty() {
+                self.flush_leftover();
             }
+
+            self.state.update(|s| match s {
+                Some(State::HmacInit) => Some(State::HmacPreAuth),
+                Some(State::HmacPostAuth) => Some(State::HmacFinalize),
+                _ => s,
+            });
+            // start the final digest calculation
+            regs.str.modify(STR::DCAL::SET);
+        } else {
+            // We need to process more
+            // self.state.update(|_| {
+            //     if is_inner {
+            //         Some(State::HmacInit)
+            //     } else {
+            //         Some(State::HmacPostAuth)
+            //     }
+            // });
+            regs.imr.modify(IMR::DINIE::SET);
         }
     }
 
     fn flush_leftover(&self) {
         let regs = self.regs;
         regs.str
-            // NOTE(frihetselsker): This is AWFUL
-            // I think if there is a tradeoff for how to proceed here
-            // bytes_filled will create the same piece of code for other parts
-            // Let's leave it as-is for now
             .modify(STR::NBLW.val(((4 - self.leftover.bytes_left()) * 8) as u32));
         regs.din.set(self.leftover.to_le());
     }
@@ -855,9 +860,9 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
         // If we have key and it is not loaded yet, do load it now
         if self.hmac_key.is_stored() && self.hmac_key.left_to_load() > 0 {
             self.state.set(Some(State::HmacInit));
-            self.load_key(true);
+            self.load_key();
         } else {
-            debug!("Set ADD state");
+            // debug!("Set ADD state");
             self.state.set(Some(State::Add));
 
             if let Some(dma) = self.dma.get() {
@@ -925,7 +930,7 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
         // If we have key and it is not loaded yet, do load it now
         if self.hmac_key.is_stored() && self.hmac_key.left_to_load() > 0 {
             self.state.set(Some(State::HmacInit));
-            self.load_key(true);
+            self.load_key();
         } else {
             self.state.set(Some(State::Add));
 
@@ -1031,6 +1036,7 @@ impl Sha224 for Hash<'_> {
             return Err(kernel::ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA2_224));
+        self.hmac_key.clear();
         self.regs.cr.modify(
             CR::ALGO::SHA2_224
                 + CR::MODE::CLEAR
@@ -1048,6 +1054,7 @@ impl Sha256 for Hash<'_> {
             return Err(kernel::ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA2_256));
+        self.hmac_key.clear();
         self.regs.cr.modify(
             CR::ALGO::SHA2_256
                 + CR::MODE::CLEAR
@@ -1055,19 +1062,18 @@ impl Sha256 for Hash<'_> {
                 + CR::DATATYPE::_8bitData
                 + CR::INIT::SET,
         );
-        self.hmac_key.clear();
         Ok(())
     }
 }
 
-impl HmacSha256<'static> for Hash<'static> {
-    fn set_mode_hmacsha256(&self, key: &'static [u8]) -> Result<(), kernel::ErrorCode> {
+impl HmacSha256 for Hash<'_> {
+    fn set_mode_hmacsha256(&self, key: &[u8]) -> Result<(), kernel::ErrorCode> {
         if self.state.get().is_some() {
             return Err(ErrorCode::BUSY);
         }
         let regs = self.regs;
         self.mode.set(Some(Mode::SHA2_256));
-        self.hmac_key.set(key);
+        self.hmac_key.set(key)?;
         regs.cr
             .modify(CR::ALGO::SHA2_256 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);
         if key.len() > LONG_HMAC_KEY_LEN {
@@ -1092,13 +1098,13 @@ impl Sha512 for Hash<'_> {
     }
 }
 
-impl HmacMd5<'static> for Hash<'static> {
-    fn set_mode_hmacmd5(&self, key: &'static [u8]) -> Result<(), ErrorCode> {
+impl HmacMd5 for Hash<'_> {
+    fn set_mode_hmacmd5(&self, key: &[u8]) -> Result<(), ErrorCode> {
         if self.state.get().is_some() {
             return Err(ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::MD5));
-        self.hmac_key.set(key);
+        self.hmac_key.set(key)?;
         self.regs
             .cr
             .modify(CR::ALGO::MD5 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);
@@ -1111,13 +1117,13 @@ impl HmacMd5<'static> for Hash<'static> {
     }
 }
 
-impl HmacSha1<'static> for Hash<'static> {
-    fn set_mode_hmacsha1(&self, key: &'static [u8]) -> Result<(), ErrorCode> {
+impl HmacSha1 for Hash<'_> {
+    fn set_mode_hmacsha1(&self, key: &[u8]) -> Result<(), ErrorCode> {
         if self.state.get().is_some() {
             return Err(ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA1));
-        self.hmac_key.set(key);
+        self.hmac_key.set(key)?;
         self.regs
             .cr
             .modify(CR::ALGO::SHA_1 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);
@@ -1130,13 +1136,13 @@ impl HmacSha1<'static> for Hash<'static> {
     }
 }
 
-impl HmacSha224<'static> for Hash<'static> {
-    fn set_mode_hmacsha224(&self, key: &'static [u8]) -> Result<(), ErrorCode> {
+impl HmacSha224 for Hash<'_> {
+    fn set_mode_hmacsha224(&self, key: &[u8]) -> Result<(), ErrorCode> {
         if self.state.get().is_some() {
             return Err(ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA2_224));
-        self.hmac_key.set(key);
+        self.hmac_key.set(key)?;
         self.regs
             .cr
             .modify(CR::ALGO::SHA2_224 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);
@@ -1150,14 +1156,14 @@ impl HmacSha224<'static> for Hash<'static> {
     }
 }
 
-impl<'a> HmacSha384<'a> for Hash<'a> {
-    fn set_mode_hmacsha384(&self, _key: &'a [u8]) -> Result<(), kernel::ErrorCode> {
+impl HmacSha384 for Hash<'_> {
+    fn set_mode_hmacsha384(&self, _key: &[u8]) -> Result<(), kernel::ErrorCode> {
         Err(kernel::ErrorCode::NOSUPPORT)
     }
 }
 
-impl<'a> HmacSha512<'a> for Hash<'a> {
-    fn set_mode_hmacsha512(&self, _key: &'a [u8]) -> Result<(), kernel::ErrorCode> {
+impl HmacSha512 for Hash<'_> {
+    fn set_mode_hmacsha512(&self, _key: &[u8]) -> Result<(), kernel::ErrorCode> {
         Err(kernel::ErrorCode::NOSUPPORT)
     }
 }

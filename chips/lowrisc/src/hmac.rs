@@ -372,8 +372,8 @@ impl<'a> hil::digest::Digest<'a, 32> for Hmac<'a> {
     }
 }
 
-impl<'a> hil::digest::HmacSha256<'a> for Hmac<'a> {
-    fn set_mode_hmacsha256(&self, key: &'a [u8]) -> Result<(), ErrorCode> {
+impl hil::digest::HmacSha256 for Hmac<'_> {
+    fn set_mode_hmacsha256(&self, key: &[u8]) -> Result<(), ErrorCode> {
         if self.busy.get() {
             return Err(ErrorCode::BUSY);
         }
@@ -420,13 +420,13 @@ impl<'a> hil::digest::HmacSha256<'a> for Hmac<'a> {
     }
 }
 
-impl<'a> hil::digest::HmacSha384<'a> for Hmac<'a> {
+impl hil::digest::HmacSha384 for Hmac<'_> {
     fn set_mode_hmacsha384(&self, _key: &[u8]) -> Result<(), ErrorCode> {
         Err(ErrorCode::NOSUPPORT)
     }
 }
 
-impl<'a> hil::digest::HmacSha512<'a> for Hmac<'a> {
+impl hil::digest::HmacSha512 for Hmac<'_> {
     fn set_mode_hmacsha512(&self, _key: &[u8]) -> Result<(), ErrorCode> {
         Err(ErrorCode::NOSUPPORT)
     }

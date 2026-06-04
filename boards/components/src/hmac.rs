@@ -59,9 +59,9 @@ impl<A: 'static + digest::Digest<'static, L>, const L: usize> HmacComponent<A, L
 }
 
 impl<
-        A: kernel::hil::digest::HmacSha256<'static>
-            + digest::HmacSha384<'static>
-            + digest::HmacSha512<'static>
+        A: kernel::hil::digest::HmacSha256
+            + digest::HmacSha384
+            + digest::HmacSha512
             + 'static
             + digest::Digest<'static, L>,
         const L: usize,
