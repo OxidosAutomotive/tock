@@ -283,7 +283,7 @@ impl HmacKey {
             // Ok(None) => Err(kernel::ErrorCode::NOMEM),
             // Err(e) => Err(e)
             Some(r) => r,
-            None => Err(ErrorCode::NOMEM),
+            None => Err(ErrorCode::FAIL),
         }
     }
 
@@ -439,8 +439,20 @@ impl Hash<'_> {
             // Digest Calculation completed?
             if regs.sr.read(SR::DCIS) != 0 {
                 // If key is present, then we need to process it accordingly
-                match state {
-                    State::HmacFinalize | State::Run => {
+                match (state, self.cancelled.get()) {
+                    (State::HmacFinalize | State::Run, true) => {
+                        regs.cr.modify(CR::INIT::SET);
+                        self.client.map(|client| {
+                            if let Some(digest) = self.digest.take() {
+                                if self.verify.get() {
+                                    client.verification_done(Err(kernel::ErrorCode::CANCEL), digest)
+                                } else {
+                                    client.hash_done(Err(kernel::ErrorCode::CANCEL), digest);
+                                }
+                            }
+                        });
+                    }
+                    (State::HmacFinalize | State::Run, false) => {
                         // it is time to return data
                         self.return_data();
                     }
@@ -496,7 +508,6 @@ impl Hash<'_> {
                             }
                         }
                     }
-
                     (State::HmacInit | State::HmacPostAuth, false) => {
                         self.load_key();
                     }
@@ -780,13 +791,6 @@ impl Hash<'_> {
             regs.str.modify(STR::DCAL::SET);
         } else {
             // We need to process more
-            // self.state.update(|_| {
-            //     if is_inner {
-            //         Some(State::HmacInit)
-            //     } else {
-            //         Some(State::HmacPostAuth)
-            //     }
-            // });
             regs.imr.modify(IMR::DINIE::SET);
         }
     }
@@ -1234,8 +1238,24 @@ impl DeferredCallClient for Hash<'_> {
         self.state.take();
         self.client.map(|client| {
             self.data.take().map(|buf| match buf {
-                SubSliceMutImmut::Immutable(b) => client.add_data_done(Ok(()), b),
-                SubSliceMutImmut::Mutable(b) => client.add_mut_data_done(Ok(()), b),
+                SubSliceMutImmut::Immutable(mut b) => {
+                    if self.cancelled.get() {
+                        self.cancelled.set(false);
+                        b.reset();
+                        client.add_data_done(Err(ErrorCode::CANCEL), b);
+                    } else {
+                        client.add_data_done(Ok(()), b)
+                    }
+                }
+                SubSliceMutImmut::Mutable(mut b) => {
+                    if self.cancelled.get() {
+                        self.cancelled.set(false);
+                        b.reset();
+                        client.add_mut_data_done(Err(ErrorCode::CANCEL), b);
+                    } else {
+                        client.add_mut_data_done(Ok(()), b)
+                    }
+                }
             })
         });
     }
