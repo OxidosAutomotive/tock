@@ -327,6 +327,7 @@ pub struct Hash<'a> {
     data: Cell<Option<SubSliceMutImmut<'static, u8>>>,
     leftover: Leftover,
     verify: Cell<bool>,
+    cancelled: Cell<bool>,
     // How to be more flexible in this field?
     // THIS IS CRITICAL
     client: OptionalCell<&'a dyn Client<MAX_DIGEST_LEN>>,
@@ -345,7 +346,6 @@ impl<'a> Hash<'a> {
     // TODO(frihetselsker): Think about the return type
     fn start_dma_transfer(&self, dma: &'a Dma) -> Result<(), ()> {
         if let Some(mut data) = self.data.take() {
-            // NOTE: I think thsi mutable variable should be removed
             let mut can_start = true;
             if !self.leftover.is_empty() {
                 let (count, start) = self.trim_subslice(&data, data.len());
@@ -375,7 +375,7 @@ impl<'a> Hash<'a> {
                 let (dma_slice, ptr, len) = match data {
                     SubSliceMutImmut::Immutable(d) => {
                         let dma_slice = DmaSubSlice::new(d, fence);
-                        // Extract the physical pointer and length for MMIO
+                        // Extract the ph()ysical pointer and length for MMIO
                         let ptr = dma_slice.as_ptr() as u32;
                         let len = dma_slice.len() as u32;
                         (DmaSubSliceMutImmut::Immutable(dma_slice), ptr, len)
@@ -391,9 +391,6 @@ impl<'a> Hash<'a> {
                 // Save DmaSlice in the struct
                 self.dma_buffer.replace(dma_slice);
                 dma.setup(ch, crate::dma::DmaPeripheral::Hash, ptr, len);
-
-                // TODO(frihetselsker): I should consider checking the buffer emptiness
-                // In the case of fullness, the interrupt should be set
 
                 regs.imr.modify(IMR::DINIE::SET);
 
@@ -424,6 +421,7 @@ impl Hash<'_> {
             data: Cell::new(None),
             hmac_key: HmacKey::new(),
             verify: Cell::new(false),
+            cancelled: Cell::new(false),
             leftover: Leftover::new(),
             digest: OptionalCell::empty(),
             client: OptionalCell::empty(),
@@ -449,8 +447,37 @@ impl Hash<'_> {
                     _ => (),
                 }
             } else if regs.sr.read(SR::DINIS) != 0 {
-                match state {
-                    State::Add => {
+                match (state, self.cancelled.get()) {
+                    (State::Add | State::HmacInit | State::HmacPreAuth, true) => {
+                        self.cancelled.set(false);
+                        regs.cr.modify(CR::INIT::SET);
+                        self.client.map(|client| {
+                            self.data.take().map(|buf| match buf {
+                                SubSliceMutImmut::Immutable(mut b) => {
+                                    b.reset();
+                                    client.add_data_done(Err(kernel::ErrorCode::CANCEL), b)
+                                }
+                                SubSliceMutImmut::Mutable(mut b) => {
+                                    b.reset();
+                                    client.add_mut_data_done(Err(kernel::ErrorCode::CANCEL), b)
+                                }
+                            })
+                        });
+                    }
+                    (State::Run | State::HmacPostAuth | State::HmacFinalize, true) => {
+                        self.cancelled.set(false);
+                        regs.cr.modify(CR::INIT::SET);
+                        self.client.map(|client| {
+                            if let Some(digest) = self.digest.take() {
+                                if self.verify.get() {
+                                    client.verification_done(Err(kernel::ErrorCode::CANCEL), digest)
+                                } else {
+                                    client.hash_done(Err(kernel::ErrorCode::CANCEL), digest);
+                                }
+                            }
+                        });
+                    }
+                    (State::Add, false) => {
                         if self.dma.is_some() {
                             // Theoretically, there can be a situation
                             // when the FIFO is already filled, but we do need to write leftovers
@@ -469,14 +496,15 @@ impl Hash<'_> {
                             }
                         }
                     }
-                    State::HmacInit | State::HmacPostAuth => {
+
+                    (State::HmacInit | State::HmacPostAuth, false) => {
                         self.load_key();
                     }
-                    State::Run => {
+                    (State::Run, false) => {
                         self.state.set(Some(State::HmacPostAuth));
                         self.load_key();
                     }
-                    State::HmacPreAuth => {
+                    (State::HmacPreAuth, false) => {
                         self.state.set(Some(State::Add));
                         // self.hmac_key.is_loaded.set(Some(true));
 
@@ -531,6 +559,8 @@ impl Hash<'_> {
     fn return_data(&self) {
         self.client.map(|client| {
             let regs = self.regs;
+            // TODO: fix this disaster
+            // NO UNWRAPS
             let digest = self.digest.take().unwrap();
             // We need to compare the result with the digest received before.
             // If there is no operation, we react in no manner.
@@ -584,7 +614,6 @@ impl Hash<'_> {
                     // TODO: make it better in the sense we don't need to store client with
                     digest[(mode.get_digest_len() * 4)..MAX_DIGEST_LEN].fill(0);
 
-                    // self.clear_data();
                     regs.cr.modify(CR::INIT::SET);
                     // release the peripheral
                     self.state.take();
@@ -969,9 +998,11 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
     }
 
     fn clear_data(&self) {
-        // NOTE(frihetselsker): you cannot cancel the operation,
-        // you can only discard all the changes and reset the peripheral
-        unimplemented!()
+        if self.state.get().is_none() {
+            self.regs.cr.modify(CR::INIT::SET);
+        } else {
+            self.cancelled.set(true);
+        }
     }
 }
 
