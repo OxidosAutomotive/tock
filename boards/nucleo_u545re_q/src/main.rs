@@ -6,8 +6,8 @@
 #![no_std]
 #![no_main]
 
-use capsules_extra::test::hmac_sha256_hw::TestHmacSha256;
-use capsules_extra::test::sha256_hw::TestSha256;
+use capsules_extra::test::hmac_sha256::TestHmacSha256;
+use capsules_extra::test::sha256::TestSha256;
 use kernel::capabilities;
 use kernel::component::Component;
 use kernel::debug::PanicResources;
@@ -54,14 +54,16 @@ struct NucleoU545RE {
             stm32u545::tim::Tim2<'static>,
         >,
     >,
-    // hash: &'static capsules_extra::test::sha256_hw::TestSha256<
+    // SHA256
+    hash:
+        &'static capsules_extra::test::sha256::TestSha256<'static, stm32u545::hash::Hash<'static>>,
+    // MD5
+    // hash: &'static capsules_extra::test::md5::TestMd5<'static, stm32u545::hash::Hash<'static>>,
+    // HMAC-SHA256
+    // hash: &'static capsules_extra::test::hmac_sha256_hw::TestHmacSha256<
     //     'static,
     //     stm32u545::hash::Hash<'static>,
     // >,
-    hash: &'static capsules_extra::test::hmac_sha256_hw::TestHmacSha256<
-        'static,
-        stm32u545::hash::Hash<'static>,
-    >,
 }
 
 impl SyscallDriverLookup for NucleoU545RE {
@@ -252,16 +254,16 @@ unsafe fn start() -> (
 
     // Various test cases
     // Test 1: Simple SHA256
-    // let hash_data_buffer = static_init!([u8; 6], [0x61, 0x62, 0x63, 0x64, 0x65, 0x66]);
+    let hash_data_buffer = static_init!([u8; 6], [0x61, 0x62, 0x63, 0x64, 0x65, 0x66]);
 
-    // let hash_digest_buffer = static_init!(
-    //     [u8; 32],
-    //     [
-    //         0xbe, 0xf5, 0x7e, 0xc7, 0xf5, 0x3a, 0x6d, 0x40, 0xbe, 0xb6, 0x40, 0xa7, 0x80, 0xa6,
-    //         0x39, 0xc8, 0x3b, 0xc2, 0x9a, 0xc8, 0xa9, 0x81, 0x6f, 0x1f, 0xc6, 0xc5, 0xc6, 0xdc,
-    //         0xd9, 0x3c, 0x47, 0x21
-    //     ]
-    // );
+    let hash_digest_buffer = static_init!(
+        [u8; 32],
+        [
+            0xbe, 0xf5, 0x7e, 0xc7, 0xf5, 0x3a, 0x6d, 0x40, 0xbe, 0xb6, 0x40, 0xa7, 0x80, 0xa6,
+            0x39, 0xc8, 0x3b, 0xc2, 0x9a, 0xc8, 0xa9, 0x81, 0x6f, 0x1f, 0xc6, 0xc5, 0xc6, 0xdc,
+            0xd9, 0x3c, 0x47, 0x21
+        ]
+    );
 
     // Test 2: Less than FIFO size
     // let hash_data_buffer = static_init!(
@@ -304,39 +306,6 @@ unsafe fn start() -> (
     //         0x3d, 0x85, 0xf3, 0x1b, 0x87, 0xb9, 0x9b, 0x20, 0x22, 0x0a, 0x00, 0x7a, 0x27, 0x4f,
     //         0x30, 0xd6, 0x54, 0xf5, 0xc9, 0xec, 0x30, 0x75, 0x4f, 0xe1, 0x3c, 0x02, 0xd2, 0x0d,
     //         0x14, 0xa1, 0xba, 0xe7
-    //     ]
-    // );
-    // MD5
-    // let hash_data_buffer = static_init!([u8; 4], [0x61, 0x62, 0x63, 0x64]);
-
-    // let hash_digest_buffer = static_init!(
-    //     [u8; 32],
-    //     [
-    //         0xe2, 0xfc, 0x71, 0x4c, 0x47, 0x27, 0xee, 0x93, 0x95, 0xf3, 0x24, 0xcd, 0x2e, 0x7f,
-    //         0x33, 0x1f, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-    //     ]
-    // );
-
-    // SHA1
-    // let hash_data_buffer = static_init!([u8; 4], [0x61, 0x62, 0x63, 0x64]);
-
-    // let hash_digest_buffer = static_init!(
-    //     [u8; 32],
-    //     [
-    //         0x81, 0xfe, 0x8b, 0xfe, 0x87, 0x57, 0x6c, 0x3e, 0xcb, 0x22, 0x42, 0x6f, 0x8e, 0x57,
-    //         0x84, 0x73, 0x82, 0x91, 0x7a, 0xcf, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    //     ]
-    // );
-    //
-    // SHA224
-    // let hash_data_buffer = static_init!([u8; 4], [0x61, 0x62, 0x63, 0x64]);
-
-    // let hash_digest_buffer = static_init!(
-    //     [u8; 32],
-    //     [
-    //         0xa7, 0x66, 0x54, 0xd8, 0xe3, 0x55, 0x0e, 0x9a, 0x2d, 0x67, 0xa0, 0xee, 0xb6, 0xc6,
-    //         0x7b, 0x22, 0x0e, 0x58, 0x85, 0xed, 0xdd, 0x3f, 0xde, 0x13, 0x58, 0x06, 0xe6, 0x01, 0,
-    //         0, 0, 0,
     //     ]
     // );
 
@@ -394,19 +363,19 @@ unsafe fn start() -> (
 
     // Trying bigger key and data
     // DMA interrupt doesn't fire
-    let hmac_key = static_init!([u8; 6], [0x12, 0x34, 0x56, 0x78, 0x91, 0x01]);
+    // let hmac_key = static_init!([u8; 6], [0x12, 0x34, 0x56, 0x78, 0x91, 0x01]);
 
-    let hash_data_buffer = static_init!([u8; 5], [0x61, 0x62, 0x63, 0x64, 0x65]);
+    // let hash_data_buffer = static_init!([u8; 5], [0x61, 0x62, 0x63, 0x64, 0x65]);
 
-    let hash_digest_buffer = static_init!([u8; 32], [0u8; 32]);
-    let correct = static_init!(
-        [u8; 32],
-        [
-            0x3a, 0x4b, 0x96, 0x9a, 0x96, 0xa9, 0xc9, 0x52, 0x0e, 0xcd, 0xdd, 0x4d, 0xef, 0x05,
-            0x64, 0xfb, 0x1c, 0x79, 0xe6, 0xc3, 0x30, 0xa6, 0x61, 0x8f, 0x3b, 0xdc, 0xbb, 0x0f,
-            0xd6, 0xaf, 0x55, 0x44
-        ]
-    );
+    // let hash_digest_buffer = static_init!([u8; 32], [0u8; 32]);
+    // let correct = static_init!(
+    //     [u8; 32],
+    //     [
+    //         0x3a, 0x4b, 0x96, 0x9a, 0x96, 0xa9, 0xc9, 0x52, 0x0e, 0xcd, 0xdd, 0x4d, 0xef, 0x05,
+    //         0x64, 0xfb, 0x1c, 0x79, 0xe6, 0xc3, 0x30, 0xa6, 0x61, 0x8f, 0x3b, 0xdc, 0xbb, 0x0f,
+    //         0xd6, 0xaf, 0x55, 0x44
+    //     ]
+    // );
 
     // let hash_data_buffer = static_init!(
     //     [u8; 113],
@@ -481,20 +450,54 @@ unsafe fn start() -> (
     //     ]
     // );
 
+    // let test_hash = static_init!(
+    //     TestHmacSha256<'static, Hash<'static>>,
+    //     TestHmacSha256::new(
+    //         hash,
+    //         hmac_key,
+    //         hash_data_buffer,
+    //         hash_digest_buffer,
+    //         correct
+    //     )
+    // );
+
     let test_hash = static_init!(
-        TestHmacSha256<'static, Hash<'static>>,
-        TestHmacSha256::new(
-            hash,
-            hmac_key,
-            hash_data_buffer,
-            hash_digest_buffer,
-            correct
-        )
+        TestSha256<'static, Hash<'static>>,
+        TestSha256::new(hash, hash_data_buffer, hash_digest_buffer, true)
     );
 
-    // let test_hash = static_init!(
-    //     TestSha256<'static, Hash<'static>>,
-    //     TestSha256::new(hash, hash_data_buffer, hash_digest_buffer, true)
+    // MD5
+    // let hash_data_buffer = static_init!([u8; 4], [0x61, 0x62, 0x63, 0x64]);
+
+    // let hash_digest_buffer = static_init!(
+    //     [u8; 32],
+    //     [
+    //         0xe2, 0xfc, 0x71, 0x4c, 0x47, 0x27, 0xee, 0x93, 0x95, 0xf3, 0x24, 0xcd, 0x2e, 0x7f,
+    //         0x33, 0x1f, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    //     ]
+    // );
+
+    // SHA1
+    // let hash_data_buffer = static_init!([u8; 4], [0x61, 0x62, 0x63, 0x64]);
+
+    // let hash_digest_buffer = static_init!(
+    //     [u8; 32],
+    //     [
+    //         0x81, 0xfe, 0x8b, 0xfe, 0x87, 0x57, 0x6c, 0x3e, 0xcb, 0x22, 0x42, 0x6f, 0x8e, 0x57,
+    //         0x84, 0x73, 0x82, 0x91, 0x7a, 0xcf, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    //     ]
+    // );
+    //
+    // SHA224
+    // let hash_data_buffer = static_init!([u8; 4], [0x61, 0x62, 0x63, 0x64]);
+
+    // let hash_digest_buffer = static_init!(
+    //     [u8; 32],
+    //     [
+    //         0xa7, 0x66, 0x54, 0xd8, 0xe3, 0x55, 0x0e, 0x9a, 0x2d, 0x67, 0xa0, 0xee, 0xb6, 0xc6,
+    //         0x7b, 0x22, 0x0e, 0x58, 0x85, 0xed, 0xdd, 0x3f, 0xde, 0x13, 0x58, 0x06, 0xe6, 0x01, 0,
+    //         0, 0, 0,
+    //     ]
     // );
 
     // Platform and Interrupts

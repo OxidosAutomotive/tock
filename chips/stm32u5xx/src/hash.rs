@@ -343,7 +343,6 @@ impl<'a> Hash<'a> {
         dma.set_client(channel, hash);
     }
 
-    // TODO(frihetselsker): Think about the return type
     fn start_dma_transfer(&self, dma: &'a Dma) -> Result<(), ()> {
         if let Some(mut data) = self.data.take() {
             let mut can_start = true;
@@ -517,11 +516,23 @@ impl Hash<'_> {
                     }
                     (State::HmacPreAuth, false) => {
                         self.state.set(Some(State::Add));
-                        // self.hmac_key.is_loaded.set(Some(true));
 
                         if let Some(dma) = self.dma.get() {
-                            // TODO(frihetselsker): handle result gracefully
-                            let _ = self.start_dma_transfer(dma);
+                            if self.start_dma_transfer(dma).is_err() {
+                                self.client.map(|client| {
+                                    self.data.take().map(|buf| match buf {
+                                        SubSliceMutImmut::Immutable(mut b) => {
+                                            b.reset();
+                                            client.add_data_done(Err(kernel::ErrorCode::FAIL), b)
+                                        }
+                                        SubSliceMutImmut::Mutable(mut b) => {
+                                            b.reset();
+                                            client
+                                                .add_mut_data_done(Err(kernel::ErrorCode::FAIL), b)
+                                        }
+                                    })
+                                });
+                            }
                         } else {
                             if !self.data_progress() {
                                 // we added all the data
@@ -570,68 +581,67 @@ impl Hash<'_> {
     fn return_data(&self) {
         self.client.map(|client| {
             let regs = self.regs;
-            // TODO: fix this disaster
-            // NO UNWRAPS
-            let digest = self.digest.take().unwrap();
-            // We need to compare the result with the digest received before.
-            // If there is no operation, we react in no manner.
-            if let Some(mode) = self.mode.get() {
-                if self.verify.get() {
-                    let mut equal = true;
-                    for i in 0..mode.get_digest_len() {
-                        let d = regs.hr[i].get().to_be_bytes();
+            if let Some(digest) = self.digest.take() {
+                // We need to compare the result with the digest received before.
+                // If there is no operation, we react in no manner.
+                if let Some(mode) = self.mode.get() {
+                    if self.verify.get() {
+                        let mut equal = true;
+                        for i in 0..mode.get_digest_len() {
+                            let d = regs.hr[i].get().to_be_bytes();
 
-                        debug!(
-                            "SHA: Check {} - Data: 0x{:02x}{:02x}{:02x}{:02x}",
-                            i, d[0], d[1], d[2], d[3]
-                        );
+                            debug!(
+                                "SHA: Check {} - Data: 0x{:02x}{:02x}{:02x}{:02x}",
+                                i, d[0], d[1], d[2], d[3]
+                            );
 
-                        let idx = i * 4;
+                            let idx = i * 4;
 
-                        if digest[idx + 0] != d[0]
-                            || digest[idx + 1] != d[1]
-                            || digest[idx + 2] != d[2]
-                            || digest[idx + 3] != d[3]
-                        {
-                            equal = false;
+                            if digest[idx + 0] != d[0]
+                                || digest[idx + 1] != d[1]
+                                || digest[idx + 2] != d[2]
+                                || digest[idx + 3] != d[3]
+                            {
+                                equal = false;
+                            }
                         }
+
+                        // This resets the peripheral
+                        regs.cr.modify(CR::INIT::SET);
+                        self.state.take();
+                        if self.hmac_key.is_stored() {
+                            self.hmac_key.reset();
+                        }
+                        self.verify.set(false);
+                        client.verification_done(Ok(equal), digest);
+                    } else {
+                        for i in 0..mode.get_digest_len() {
+                            let d = regs.hr[i].get().to_be_bytes();
+
+                            let idx = i * 4;
+
+                            debug!(
+                                "SHA: Check {} - Data: 0x{:02x}{:02x}{:02x}{:02x}",
+                                i, d[0], d[1], d[2], d[3]
+                            );
+
+                            digest[idx + 0] = d[0];
+                            digest[idx + 1] = d[1];
+                            digest[idx + 2] = d[2];
+                            digest[idx + 3] = d[3];
+                        }
+                        // pad digest if needed
+                        // TODO: make it better in the sense we don't need to store client with
+                        digest[(mode.get_digest_len() * 4)..MAX_DIGEST_LEN].fill(0);
+
+                        regs.cr.modify(CR::INIT::SET);
+                        // release the peripheral
+                        self.state.take();
+                        if self.hmac_key.is_stored() {
+                            self.hmac_key.reset();
+                        }
+                        client.hash_done(Ok(()), digest);
                     }
-
-                    // This resets the peripheral
-                    regs.cr.modify(CR::INIT::SET);
-                    self.state.take();
-                    if self.hmac_key.is_stored() {
-                        self.hmac_key.reset();
-                    }
-                    self.verify.set(false);
-                    client.verification_done(Ok(equal), digest);
-                } else {
-                    for i in 0..mode.get_digest_len() {
-                        let d = regs.hr[i].get().to_be_bytes();
-
-                        let idx = i * 4;
-
-                        debug!(
-                            "SHA: Check {} - Data: 0x{:02x}{:02x}{:02x}{:02x}",
-                            i, d[0], d[1], d[2], d[3]
-                        );
-
-                        digest[idx + 0] = d[0];
-                        digest[idx + 1] = d[1];
-                        digest[idx + 2] = d[2];
-                        digest[idx + 3] = d[3];
-                    }
-                    // pad digest if needed
-                    // TODO: make it better in the sense we don't need to store client with
-                    digest[(mode.get_digest_len() * 4)..MAX_DIGEST_LEN].fill(0);
-
-                    regs.cr.modify(CR::INIT::SET);
-                    // release the peripheral
-                    self.state.take();
-                    if self.hmac_key.is_stored() {
-                        self.hmac_key.reset();
-                    }
-                    client.hash_done(Ok(()), digest);
                 }
             }
         });

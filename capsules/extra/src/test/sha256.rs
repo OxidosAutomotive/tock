@@ -1,8 +1,9 @@
 // Licensed under the Apache License, Version 2.0 or the MIT License.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright Tock Contributors 2022.
+// Copyright Oxidos Automotive 2026.
 
-//! Test the software implementation of SHA256 by performing a hash
+//! Test the implementation of SHA256 driver by performing a hash
 //! and checking it against the expected hash value. It uses
 //! DigestData::add_date and DigestVerify::verify through the
 //! Digest trait.
@@ -10,18 +11,16 @@
 use core::cell::Cell;
 use core::cmp;
 
-use crate::sha256::Sha256Software;
 use capsules_core::test::capsule_test::{CapsuleTest, CapsuleTestClient};
 use kernel::debug;
 use kernel::hil::digest;
-use kernel::hil::digest::{Digest, DigestData, DigestVerify};
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::utilities::leasable_buffer::SubSlice;
 use kernel::utilities::leasable_buffer::SubSliceMut;
 use kernel::ErrorCode;
 
-pub struct TestSha256 {
-    sha: &'static Sha256Software<'static>,
+pub struct TestSha256<'a, H: digest::Digest<'a, 32>> {
+    sha: &'a H,
     data: TakeCell<'static, [u8]>,     // The data to hash
     hash: TakeCell<'static, [u8; 32]>, // The supplied hash
     position: Cell<usize>,             // Keep track of position in data
@@ -34,9 +33,9 @@ pub struct TestSha256 {
 // as well as zeroing out incomplete blocks).
 const CHUNK_SIZE: usize = 12;
 
-impl TestSha256 {
+impl<'a, H: digest::Digest<'a, 32> + digest::Sha256> TestSha256<'a, H> {
     pub fn new(
-        sha: &'static Sha256Software<'static>,
+        sha: &'a H,
         data: &'static mut [u8],
         hash: &'static mut [u8; 32],
         correct: bool,
@@ -51,7 +50,11 @@ impl TestSha256 {
         }
     }
 
-    pub fn run(&'static self) {
+    pub fn run(&'a self) {
+        let r = self.sha.set_mode_sha256();
+        if r.is_err() {
+            panic!("Sha256Test: failed to set mode: {:?}", r)
+        }
         self.sha.set_client(self);
         let data = self.data.take().unwrap();
         let chunk_size = cmp::min(CHUNK_SIZE, data.len());
@@ -65,7 +68,7 @@ impl TestSha256 {
     }
 }
 
-impl digest::ClientData<32> for TestSha256 {
+impl<'a, H: digest::Digest<'a, 32>> digest::ClientData<32> for TestSha256<'a, H> {
     fn add_data_done(&self, _result: Result<(), ErrorCode>, _data: SubSlice<'static, u8>) {
         unimplemented!()
     }
@@ -110,7 +113,7 @@ impl digest::ClientData<32> for TestSha256 {
     }
 }
 
-impl digest::ClientVerify<32> for TestSha256 {
+impl<'a, H: digest::Digest<'a, 32>> digest::ClientVerify<32> for TestSha256<'a, H> {
     fn verification_done(&self, result: Result<bool, ErrorCode>, compare: &'static mut [u8; 32]) {
         self.hash.put(Some(compare));
         debug!("Sha256Test: Verification result: {:?}", result);
@@ -135,11 +138,11 @@ impl digest::ClientVerify<32> for TestSha256 {
     }
 }
 
-impl digest::ClientHash<32> for TestSha256 {
+impl<'a, H: digest::Digest<'a, 32>> digest::ClientHash<32> for TestSha256<'a, H> {
     fn hash_done(&self, _result: Result<(), ErrorCode>, _digest: &'static mut [u8; 32]) {}
 }
 
-impl CapsuleTest for TestSha256 {
+impl<'a, H: digest::Digest<'a, 32>> CapsuleTest for TestSha256<'a, H> {
     fn set_client(&self, client: &'static dyn CapsuleTestClient) {
         self.client.set(client);
     }

@@ -16,6 +16,5 @@ pub mod md5;
 pub mod sha1;
 pub mod sha224;
 pub mod sha256;
-pub mod sha256_hw;
 pub mod siphash24;
 pub mod udp;
