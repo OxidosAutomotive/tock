@@ -2,7 +2,7 @@ use core::cell::Cell;
 use core::marker::PhantomData;
 use kernel::errorcode::ErrorCode;
 use kernel::hil::symmetric_encryption::{
-    AESKeySize, AESKeyWrapper, WrappedKeyClient, AES, AES128_KEY_SIZE, AES_BLOCK_SIZE, AES_IV_SIZE,
+    AESKey, AESKeySize, AES, AES128_KEY_SIZE, AES_BLOCK_SIZE, AES_IV_SIZE,
 };
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
@@ -201,10 +201,10 @@ pub struct Saes<'a, K: AESKeySize> {
     state: Cell<State>,
     encrypting: Cell<bool>,
     client: OptionalCell<&'a dyn kernel::hil::symmetric_encryption::Client<'a>>,
-    key_client: OptionalCell<&'a dyn WrappedKeyClient<K>>,
     input: TakeCell<'static, [u8]>,
     output: TakeCell<'static, [u8]>,
     iv: Cell<[u8; AES_IV_SIZE]>,
+    _phantom: PhantomData<K>,
 }
 
 impl<'a, K: AESKeySize> Saes<'a, K> {
@@ -215,10 +215,10 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
             encrypting: Cell::new(true),
             state: Cell::new(State::Idle),
             client: OptionalCell::empty(),
-            key_client: OptionalCell::empty(),
             input: TakeCell::empty(),
             output: TakeCell::empty(),
             iv: Cell::new([0; AES_IV_SIZE]),
+            _phantom: PhantomData::<K>,
         }
     }
 
@@ -429,7 +429,12 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
         self.client.set(client);
     }
 
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode> {
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
+        let key = match key {
+            AESKey::PlainText(key) => key,
+            _ => return Err(ErrorCode::INVAL),
+        };
+
         if key.len() != K::LENGTH {
             return Err(ErrorCode::INVAL);
         }
@@ -555,45 +560,35 @@ impl<K: AESKeySize> kernel::hil::symmetric_encryption::AESCBC for Saes<'_, K> {
     }
 }
 
-impl<'a, K: AESKeySize> AESKeyWrapper<'a, K> for Saes<'a, K> {
-    fn set_wrapped_key(&self, key: &[u8]) -> Result<(), ErrorCode> {
-        Ok(())
-    }
+// fn wrap_key(&self, key: &'static mut [u8]) -> Result<(), ErrorCode> {
+//     let regs = self.registers;
+//     if regs.sr.any_matching_bits_set(SR::BUSY::SET)
+//         || regs.cr.any_matching_bits_set(CR::EN::SET)
+//     {
+//         return Err(ErrorCode::BUSY);
+//     }
 
-    fn wrap_key(&self, key: &'static mut [u8]) -> Result<(), ErrorCode> {
-        let regs = self.registers;
-        if regs.sr.any_matching_bits_set(SR::BUSY::SET)
-            || regs.cr.any_matching_bits_set(CR::EN::SET)
-        {
-            return Err(ErrorCode::BUSY);
-        }
+//     if self.state.get() != State::Idle {
+//         return Err(ErrorCode::BUSY);
+//     }
 
-        if self.state.get() != State::Idle {
-            return Err(ErrorCode::BUSY);
-        }
+//     match K::LENGTH {
+//         16 => {
+//             regs.cr.modify(CR::KEYSIZE::AES128);
+//         }
+//         32 => {
+//             regs.cr.modify(CR::KEYSIZE::AES256);
+//         }
+//         _ => return Err(ErrorCode::INVAL),
+//     }
 
-        match K::LENGTH {
-            16 => {
-                regs.cr.modify(CR::KEYSIZE::AES128);
-            }
-            32 => {
-                regs.cr.modify(CR::KEYSIZE::AES256);
-            }
-            _ => return Err(ErrorCode::INVAL),
-        }
+//     self.state.set(State::KeyWrapping);
+//     regs.cr
+//         .modify(CR::MODE::Encrypt + CR::KMOD::WRAPPED + CR::KEYSEL::DHUK + CR::MODE::Encrypt);
 
-        self.state.set(State::KeyWrapping);
-        regs.cr
-            .modify(CR::MODE::Encrypt + CR::KMOD::WRAPPED + CR::KEYSEL::DHUK + CR::MODE::Encrypt);
+//     regs.cr.modify(CR::EN::SET);
 
-        regs.cr.modify(CR::EN::SET);
+//     self.write_padded_to_dinr(&key[0..AES128_KEY_SIZE]);
 
-        self.write_padded_to_dinr(&key[0..AES128_KEY_SIZE]);
-
-        Ok(())
-    }
-
-    fn set_client(&'a self, client: &'a dyn WrappedKeyClient<K>) {
-        self.key_client.set(client);
-    }
-}
+//     Ok(())
+// }

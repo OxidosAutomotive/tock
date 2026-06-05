@@ -19,7 +19,7 @@ use core::cell::Cell;
 use kernel::debug;
 use kernel::hil;
 use kernel::hil::symmetric_encryption::{
-    AESCtr, AES, AES256, AES256_KEY_SIZE, AESCBC, AESECB, AES_BLOCK_SIZE,
+    AESCtr, AESKey, AES, AES256, AES256_KEY_SIZE, AESCBC, AESECB, AES_BLOCK_SIZE,
 };
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::cells::TakeCell;
@@ -89,7 +89,7 @@ impl<'a, A: AES<'a, AES256> + AESECB> TestAES256Ecb<'a, A> {
             self.aes.set_mode_aesecb(encrypting).unwrap();
             self.key.map(|key| {
                 key[..KEY.len()].copy_from_slice(&KEY);
-                assert_eq!(self.aes.set_key(key), Ok(()));
+                assert_eq!(self.aes.set_key(AESKey::PlainText(key)), Ok(()));
             });
             let src = if encrypting { &PTXT } else { &CTXT_ECB };
             self.source.map(|s| s[..src.len()].copy_from_slice(src));
@@ -192,7 +192,7 @@ impl<'a, A: AES<'a, AES256> + AESCBC> TestAES256Cbc<'a, A> {
             self.aes.set_mode_aescbc(encrypting).unwrap();
             self.key.map(|key| {
                 key[..KEY.len()].copy_from_slice(&KEY);
-                assert_eq!(self.aes.set_key(key), Ok(()));
+                assert_eq!(self.aes.set_key(AESKey::PlainText(key)), Ok(()));
             });
             self.iv.map(|iv| {
                 iv[..IV_CBC.len()].copy_from_slice(&IV_CBC);
@@ -298,7 +298,7 @@ impl<'a, A: AES<'a, AES256> + AESCtr> TestAES256Ctr<'a, A> {
             self.aes.set_mode_aesctr(encrypting).unwrap();
             self.key.map(|key| {
                 key[..KEY.len()].copy_from_slice(&KEY);
-                assert_eq!(self.aes.set_key(key), Ok(()));
+                assert_eq!(self.aes.set_key(AESKey::PlainText(key)), Ok(()));
             });
             self.iv.map(|iv| {
                 iv[..IV_CTR.len()].copy_from_slice(&IV_CTR);

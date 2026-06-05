@@ -11,7 +11,7 @@ use crate::dma::DmaPeripheral;
 use core::cell::Cell;
 use core::marker::PhantomData;
 use cortexm33::dma_fence::CortexMDmaFence;
-use kernel::hil::symmetric_encryption::{AESKeySize, AES, AES_BLOCK_SIZE, AES_IV_SIZE};
+use kernel::hil::symmetric_encryption::{AESKey, AESKeySize, AES, AES_BLOCK_SIZE, AES_IV_SIZE};
 use kernel::utilities::cells::{MapCell, OptionalCell, TakeCell};
 use kernel::utilities::dma_slice::DmaSubSliceMut;
 use kernel::utilities::leasable_buffer::SubSliceMut;
@@ -498,7 +498,12 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Aes<'a
         self.classic_client.set(client);
     }
 
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode> {
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
+        let key = match key {
+            AESKey::PlainText(key) => key,
+            _ => return Err(ErrorCode::INVAL),
+        };
+
         if key.len() != K::LENGTH {
             return Err(ErrorCode::INVAL);
         }

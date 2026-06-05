@@ -225,17 +225,3 @@ pub trait AESGCM<'a, K: AESKeySize> {
 pub trait WrappedKeyClient<K: AESKeySize> {
     fn wrapping_done(&self, wrapped_key: &'static mut [u8]);
 }
-
-pub trait AESKeyWrapper<'a, K: AESKeySize> {
-    /// Set the client instance which will receive `wrapping_done()` callbacks
-    fn set_client(&'a self, client: &'a dyn WrappedKeyClient<K>);
-
-    /// Performs the key wrapping algorithm for a key of size `AESKeySize`
-    /// Returns `INVAL` if length is not `AESKeySize::LENGTH`
-    /// Should be used only after calling `set_mode_*` and, optionally, `set_iv`
-    fn wrap_key(&self, key: &'static mut [u8]) -> Result<(), ErrorCode>;
-
-    /// Set the wrapped encryption key.
-    /// Returns `INVAL` if length is not `AESKeySize::LENGTH`
-    fn set_wrapped_key(&self, key: &[u8]) -> Result<(), ErrorCode>;
-}

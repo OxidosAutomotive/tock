@@ -22,7 +22,7 @@
 
 use core::cell::Cell;
 use kernel::debug;
-use kernel::hil::symmetric_encryption::{GCMClient, AES256, AES256_KEY_SIZE, AESGCM};
+use kernel::hil::symmetric_encryption::{AESKey, GCMClient, AES256, AES256_KEY_SIZE, AESGCM};
 use kernel::utilities::cells::TakeCell;
 use kernel::ErrorCode;
 
@@ -107,7 +107,7 @@ impl<'a, A: AESGCM<'a, AES256>> TestAES256Gcm<'a, A> {
             }
         }
 
-        match self.aes_gcm.set_key(v.key) {
+        match self.aes_gcm.set_key(AESKey::PlainText(v.key)) {
             Ok(()) => {}
             Err(e) => {
                 panic!(

@@ -7,7 +7,9 @@ use crate::aes::{AESMode, Aes, CryptoContext, DeferredOp, State};
 use crate::dma::ChannelId;
 use crate::dma::Dma;
 use crate::dma::DmaPeripheral;
-use kernel::hil::symmetric_encryption::{AESKeySize, GCMClient, AES, AES_BLOCK_SIZE, AES_IV_SIZE};
+use kernel::hil::symmetric_encryption::{
+    AESKey, AESKeySize, GCMClient, AES, AES_BLOCK_SIZE, AES_IV_SIZE,
+};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::ErrorCode;
 
@@ -664,7 +666,7 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AESGCM<'a, K> for Aes
     }
 
     /// AES GCM init phase and key set phase
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode> {
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
         self.init_gcm();
         AES::set_key(self, key)?;
         Ok(())
@@ -742,7 +744,7 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AESCCM<'a, K> for Aes
         self.ccm_client.set(client);
     }
 
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode> {
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
         self.init_ccm();
         AES::set_key(self, key)?;
         Ok(())
