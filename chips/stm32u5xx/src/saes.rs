@@ -2,7 +2,7 @@ use core::cell::Cell;
 use core::marker::PhantomData;
 use kernel::errorcode::ErrorCode;
 use kernel::hil::symmetric_encryption::{
-    AESKeySize, AES, AES128_KEY_SIZE, AES_BLOCK_SIZE, AES_IV_SIZE, WrappedKeyClient
+    AESKeySize, AESKeyWrapper, WrappedKeyClient, AES, AES128_KEY_SIZE, AES_BLOCK_SIZE, AES_IV_SIZE,
 };
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
@@ -195,55 +195,20 @@ enum State {
     KeyWrapping,
 }
 
-pub enum WrappedKeyType {
-    DHUK,
-    BHK,
-    XORK,
-}
-
-// using both AESKeySize and KEY_LEN, even though AESKeySize has const LENGTH because the compiler
-// doesn't recognize the LENGTH field as a const
-pub struct SharedKey<K: AESKeySize, const KEY_LEN: usize> {
-    key: [u8; KEY_LEN],
-    key_type: WrappedKeyType,
-    _phantom: PhantomData<K>,
-}
-
-impl<K: AESKeySize, const KEY_LEN: usize> SharedKey<K, KEY_LEN> {
-    pub fn new(key: &[u8], key_type: WrappedKeyType) -> SharedKey<K, KEY_LEN> {
-        assert_eq!(K::LENGTH, KEY_LEN);
-        let mut wrapped_key_buf = [0; KEY_LEN];
-        wrapped_key_buf.copy_from_slice(key);
-
-        SharedKey {
-            key: wrapped_key_buf,
-            key_type: key_type,
-            _phantom: PhantomData::<K>,
-        }
-    }
-
-    fn set_lower_bytes(&mut self, key: &[u8]) {
-        self.key[0..AES128_KEY_SIZE].copy_from_slice(&key[0..AES128_KEY_SIZE]);
-    }
-
-}
-
-pub struct Saes<'a, K: AESKeySize, const KEY_LEN: usize> {
+pub struct Saes<'a, K: AESKeySize> {
     registers: StaticRef<SaesRegisters>,
     mode: Cell<SAESMode>,
     state: Cell<State>,
     encrypting: Cell<bool>,
     client: OptionalCell<&'a dyn kernel::hil::symmetric_encryption::Client<'a>>,
-    key_client: OptionalCell<&'a dyn WrappedKeyClient<K, KEY_LEN>>,
+    key_client: OptionalCell<&'a dyn WrappedKeyClient<K>>,
     input: TakeCell<'static, [u8]>,
     output: TakeCell<'static, [u8]>,
     iv: Cell<[u8; AES_IV_SIZE]>,
-    wrapped_key: OptionalCell<SharedKey<K, KEY_LEN>>,
 }
 
-impl<'a, K: AESKeySize, const KEY_LEN: usize> Saes<'a, K, KEY_LEN> {
-    pub fn new(base: StaticRef<SaesRegisters>) -> Saes<'a, K, KEY_LEN> {
-        assert_eq!(K::LENGTH, KEY_LEN);
+impl<'a, K: AESKeySize> Saes<'a, K> {
+    pub fn new(base: StaticRef<SaesRegisters>) -> Saes<'a, K> {
         Saes {
             registers: base,
             mode: Cell::new(SAESMode::ECB),
@@ -254,7 +219,6 @@ impl<'a, K: AESKeySize, const KEY_LEN: usize> Saes<'a, K, KEY_LEN> {
             input: TakeCell::empty(),
             output: TakeCell::empty(),
             iv: Cell::new([0; AES_IV_SIZE]),
-            wrapped_key: OptionalCell::empty(),
         }
     }
 
@@ -420,13 +384,7 @@ impl<'a, K: AESKeySize, const KEY_LEN: usize> Saes<'a, K, KEY_LEN> {
                     self.write_input(ctx);
                 }
             }
-            State::KeyWrapping => {
-
-                match KEY_LEN {
-                    16 =>
-
-                }
-            }
+            State::KeyWrapping => {}
             _ => {}
         }
     }
@@ -451,9 +409,7 @@ impl<'a, K: AESKeySize, const KEY_LEN: usize> Saes<'a, K, KEY_LEN> {
     }
 }
 
-impl<'a, K: AESKeySize, const KEY_LEN: usize> kernel::hil::symmetric_encryption::AES<'a, K>
-    for Saes<'a, K, KEY_LEN>
-{
+impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'a, K> {
     fn enable(&self) {
         self.registers.cr.modify(CR::IPRST::SET);
         self.registers.cr.write(CR::EN::CLEAR);
@@ -581,9 +537,7 @@ impl<'a, K: AESKeySize, const KEY_LEN: usize> kernel::hil::symmetric_encryption:
     }
 }
 
-impl<K: AESKeySize, const KEY_LEN: usize> kernel::hil::symmetric_encryption::AESECB
-    for Saes<'_, K, KEY_LEN>
-{
+impl<K: AESKeySize> kernel::hil::symmetric_encryption::AESECB for Saes<'_, K> {
     fn set_mode_aesecb(&self, encrypting: bool) -> Result<(), ErrorCode> {
         self.mode.set(SAESMode::ECB);
         self.registers.cr.modify(CR::CHMOD::ECB);
@@ -592,9 +546,7 @@ impl<K: AESKeySize, const KEY_LEN: usize> kernel::hil::symmetric_encryption::AES
     }
 }
 
-impl<K: AESKeySize, const KEY_LEN: usize> kernel::hil::symmetric_encryption::AESCBC
-    for Saes<'_, K, KEY_LEN>
-{
+impl<K: AESKeySize> kernel::hil::symmetric_encryption::AESCBC for Saes<'_, K> {
     fn set_mode_aescbc(&self, encrypting: bool) -> Result<(), ErrorCode> {
         self.mode.set(SAESMode::CBC);
         self.registers.cr.modify(CR::CHMOD::CBC);
@@ -603,56 +555,45 @@ impl<K: AESKeySize, const KEY_LEN: usize> kernel::hil::symmetric_encryption::AES
     }
 }
 
-pub fn set_iv() -> Result<(), ErrorCode> {
-
-}
-
-pub fn wrap_key(&self, key: &mut [u8], option_iv: Option<&[u8]>) -> Result<(), ErrorCode> {
-    let regs = self.registers;
-    if regs.sr.any_matching_bits_set(SR::BUSY::SET)
-        || regs.cr.any_matching_bits_set(CR::EN::SET)
-    {
-        return Err(ErrorCode::BUSY);
+impl<'a, K: AESKeySize> AESKeyWrapper<'a, K> for Saes<'a, K> {
+    fn set_wrapped_key(&self, key: &[u8]) -> Result<(), ErrorCode> {
+        Ok(())
     }
 
-    if self.state.get() != State::Idle {
-        return Err(ErrorCode::BUSY);
-    }
-
-    match K::LENGTH {
-        16 => {
-            regs.cr.modify(CR::KEYSIZE::AES128);
+    fn wrap_key(&self, key: &'static mut [u8]) -> Result<(), ErrorCode> {
+        let regs = self.registers;
+        if regs.sr.any_matching_bits_set(SR::BUSY::SET)
+            || regs.cr.any_matching_bits_set(CR::EN::SET)
+        {
+            return Err(ErrorCode::BUSY);
         }
-        32 => {
-            regs.cr.modify(CR::KEYSIZE::AES256);
+
+        if self.state.get() != State::Idle {
+            return Err(ErrorCode::BUSY);
         }
-        _ => return Err(ErrorCode::INVAL),
+
+        match K::LENGTH {
+            16 => {
+                regs.cr.modify(CR::KEYSIZE::AES128);
+            }
+            32 => {
+                regs.cr.modify(CR::KEYSIZE::AES256);
+            }
+            _ => return Err(ErrorCode::INVAL),
+        }
+
+        self.state.set(State::KeyWrapping);
+        regs.cr
+            .modify(CR::MODE::Encrypt + CR::KMOD::WRAPPED + CR::KEYSEL::DHUK + CR::MODE::Encrypt);
+
+        regs.cr.modify(CR::EN::SET);
+
+        self.write_padded_to_dinr(&key[0..AES128_KEY_SIZE]);
+
+        Ok(())
     }
 
-    self.state.set(State::KeyWrapping);
-    regs.cr
-        .modify(CR::MODE::Encrypt + CR::KMOD::WRAPPED + CR::KEYSEL::DHUK);
-
-    if let Some(iv) = option_iv {
-        if iv.len() != AES_IV_SIZE {
-            self.state.set(State::Idle);
-            return Err(ErrorCode::INVAL);
-        }
-        regs.cr.modify(CR::CHMOD::CBC);
-        self.write_iv_registers(iv.try_into().unwrap());
-    } else {
-        regs.cr.modify(CR::CHMOD::ECB);
+    fn set_client(&'a self, client: &'a dyn WrappedKeyClient<K>) {
+        self.key_client.set(client);
     }
-    regs.cr.modify(CR::EN::SET);
-
-    self.write_padded_to_dinr(&key[0..AES128_KEY_SIZE]);
-
-    self.wrapped_key
-        .set(SharedKey::new(key, WrappedKeyType::DHUK));
-
-    Ok(())
-}
-
-pub fn set_client(&'a self, client: &'a dyn WrappedKeyClient<K, KEY_LEN>) {
-    self.key_client.set(client);
 }
