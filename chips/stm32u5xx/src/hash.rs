@@ -147,7 +147,15 @@ const MAX_DIGEST_LEN: usize = 32;
 const LONG_HMAC_KEY_LEN: usize = 64;
 // It is an artificial limitation for compatibility with capsules.
 // Taken from boards::components::hmac
-const MAX_HMAC_KEY_LEN: usize = 1024 / 8;
+const MAX_HMAC_KEY_LEN: usize = 512 / 8;
+
+#[derive(Clone, Copy)]
+enum DataWidth {
+    _32bitData,
+    _16bitData,
+    _8bitData,
+    _1bitData,
+}
 
 #[derive(Clone, Copy)]
 enum Mode {
@@ -168,7 +176,7 @@ impl Mode {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 enum State {
     Add,
     Run,
@@ -337,9 +345,6 @@ impl HmacKey {
                 Err(ErrorCode::SIZE)
             }
         }) {
-            // Ok(Some(_)) => Ok(()),
-            // Ok(None) => Err(kernel::ErrorCode::NOMEM),
-            // Err(e) => Err(e)
             Some(r) => r,
             None => Err(ErrorCode::FAIL),
         }
@@ -377,6 +382,7 @@ pub struct Hash<'a> {
     dma_buffer: MapCell<DmaSubSliceMutImmut<'static, u8>>,
     mode: Cell<Option<Mode>>,
     state: Cell<Option<State>>,
+    data_width: Cell<Option<DataWidth>>,
     hmac_key: HmacKey,
     data: Cell<Option<SubSliceMutImmut<'static, u8>>>,
     leftover: Leftover,
@@ -472,6 +478,7 @@ impl Hash<'_> {
             dma_buffer: MapCell::empty(),
             mode: Cell::new(None),
             state: Cell::new(None),
+            data_width: Cell::new(None),
             data: Cell::new(None),
             hmac_key: HmacKey::new(),
             verify: Cell::new(false),
@@ -690,6 +697,7 @@ impl Hash<'_> {
                         }
                         // pad digest if needed
                         // TODO: make it better in the sense we don't need to store client with
+                        // specific length
                         digest[(mode.get_digest_len() * 4)..MAX_DIGEST_LEN].fill(0);
 
                         regs.cr.modify(CR::INIT::SET);
@@ -953,7 +961,7 @@ impl<'a> digest::DigestData<'a, 32> for Hash<'a> {
         if self.state.get().is_some() {
             return Err((ErrorCode::BUSY, data));
         }
-        if self.mode.get().is_none() {
+        if self.mode.get().is_none() || self.data_width.get().is_none() {
             return Err((ErrorCode::INVAL, data));
         }
         if data.len() == 0 {
@@ -999,9 +1007,7 @@ impl<'a> digest::DigestData<'a, 32> for Hash<'a> {
                 }
             } else {
                 // Otherwise, act as usual
-                if self.data_progress() {
-                    self.regs.imr.modify(IMR::DINIE::SET);
-                } else {
+                if !self.data_progress() {
                     self.deferred_call.set();
                 }
             }
@@ -1023,7 +1029,7 @@ impl<'a> digest::DigestData<'a, 32> for Hash<'a> {
         if self.state.get().is_some() {
             return Err((ErrorCode::BUSY, data));
         }
-        if self.mode.get().is_none() {
+        if self.mode.get().is_none() || self.data_width.get().is_none() {
             return Err((ErrorCode::INVAL, data));
         }
         if data.len() == 0 {
@@ -1070,9 +1076,7 @@ impl<'a> digest::DigestData<'a, 32> for Hash<'a> {
                 }
             } else {
                 // Otherwise, act as usual
-                if self.data_progress() {
-                    self.regs.imr.modify(IMR::DINIE::SET);
-                } else {
+                if !self.data_progress() {
                     self.deferred_call.set();
                 }
             }
@@ -1134,6 +1138,8 @@ impl digest::Md5 for Hash<'_> {
             return Err(kernel::ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::MD5));
+        self.data_width.set(Some(DataWidth::_8bitData));
+        self.hmac_key.clear();
         self.regs.cr.modify(
             CR::ALGO::MD5
                 + CR::MODE::CLEAR
@@ -1152,6 +1158,8 @@ impl digest::Sha1 for Hash<'_> {
             return Err(kernel::ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA1));
+        self.data_width.set(Some(DataWidth::_8bitData));
+        self.hmac_key.clear();
         self.regs.cr.modify(
             CR::ALGO::SHA_1
                 + CR::MODE::CLEAR
@@ -1169,6 +1177,7 @@ impl digest::Sha224 for Hash<'_> {
             return Err(kernel::ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA2_224));
+        self.data_width.set(Some(DataWidth::_8bitData));
         self.hmac_key.clear();
         self.regs.cr.modify(
             CR::ALGO::SHA2_224
@@ -1187,6 +1196,7 @@ impl digest::Sha256 for Hash<'_> {
             return Err(kernel::ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA2_256));
+        self.data_width.set(Some(DataWidth::_8bitData));
         self.hmac_key.clear();
         self.regs.cr.modify(
             CR::ALGO::SHA2_256
@@ -1206,6 +1216,7 @@ impl digest::HmacSha256 for Hash<'_> {
         }
         let regs = self.regs;
         self.mode.set(Some(Mode::SHA2_256));
+        self.data_width.set(Some(DataWidth::_8bitData));
         self.hmac_key.set(key)?;
         regs.cr
             .modify(CR::ALGO::SHA2_256 + CR::MDMAT::SET + CR::DATATYPE::_8bitData + CR::MODE::SET);
@@ -1237,6 +1248,7 @@ impl digest::HmacMd5 for Hash<'_> {
             return Err(ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::MD5));
+        self.data_width.set(Some(DataWidth::_8bitData));
         self.hmac_key.set(key)?;
         self.regs
             .cr
@@ -1256,6 +1268,7 @@ impl digest::HmacSha1 for Hash<'_> {
             return Err(ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA1));
+        self.data_width.set(Some(DataWidth::_8bitData));
         self.hmac_key.set(key)?;
         self.regs
             .cr
@@ -1275,6 +1288,7 @@ impl digest::HmacSha224 for Hash<'_> {
             return Err(ErrorCode::BUSY);
         }
         self.mode.set(Some(Mode::SHA2_224));
+        self.data_width.set(Some(DataWidth::_8bitData));
         self.hmac_key.set(key)?;
         self.regs
             .cr
@@ -1303,6 +1317,7 @@ impl digest::HmacSha512 for Hash<'_> {
 
 impl digest::Bit32Data for Hash<'_> {
     fn set_data_type_32_bit(&self) -> Result<(), ErrorCode> {
+        self.data_width.set(Some(DataWidth::_32bitData));
         self.regs.cr.modify(CR::DATATYPE::_32bitData);
         Ok(())
     }
@@ -1310,6 +1325,7 @@ impl digest::Bit32Data for Hash<'_> {
 
 impl digest::Bit16Data for Hash<'_> {
     fn set_data_type_16_bit(&self) -> Result<(), ErrorCode> {
+        self.data_width.set(Some(DataWidth::_16bitData));
         self.regs.cr.modify(CR::DATATYPE::_16bitData);
         Ok(())
     }
@@ -1317,6 +1333,7 @@ impl digest::Bit16Data for Hash<'_> {
 
 impl digest::Bit8Data for Hash<'_> {
     fn set_data_type_8_bit(&self) -> Result<(), ErrorCode> {
+        self.data_width.set(Some(DataWidth::_8bitData));
         self.regs.cr.modify(CR::DATATYPE::_8bitData);
         Ok(())
     }
@@ -1324,6 +1341,7 @@ impl digest::Bit8Data for Hash<'_> {
 
 impl digest::Bit1Data for Hash<'_> {
     fn set_data_type_1_bit(&self) -> Result<(), ErrorCode> {
+        self.data_width.set(Some(DataWidth::_1bitData));
         self.regs.cr.modify(CR::DATATYPE::_1bitData);
         Ok(())
     }

@@ -15,22 +15,24 @@ use kernel::utilities::leasable_buffer::SubSlice;
 use kernel::utilities::leasable_buffer::SubSliceMut;
 use kernel::ErrorCode;
 
-pub struct TestHmacSha256<'a, H: digest::Digest<'a, 32>> {
+const HMAC_SHA256_DIGEST_LEN: usize = 32;
+
+pub struct TestHmacSha256<'a, H: digest::Digest<'a, HMAC_SHA256_DIGEST_LEN>> {
     hmac: &'a H,
-    key: TakeCell<'static, [u8]>,        // The key to use for HMAC
-    data: TakeCell<'static, [u8]>,       // The data to hash
-    digest: TakeCell<'static, [u8; 32]>, // The supplied hash
-    correct: &'static [u8; 32],          // The supplied hash
+    key: TakeCell<'static, [u8]>,  // The key to use for HMAC
+    data: TakeCell<'static, [u8]>, // The data to hash
+    digest: TakeCell<'static, [u8; HMAC_SHA256_DIGEST_LEN]>, // The supplied hash
+    correct: &'static [u8; HMAC_SHA256_DIGEST_LEN], // The supplied hash
     client: OptionalCell<&'static dyn CapsuleTestClient>,
 }
 
-impl<'a, H: digest::Digest<'a, 32> + HmacSha256> TestHmacSha256<'a, H> {
+impl<'a, H: digest::Digest<'a, HMAC_SHA256_DIGEST_LEN> + HmacSha256> TestHmacSha256<'a, H> {
     pub fn new(
         hmac: &'a H,
         key: &'static mut [u8],
         data: &'static mut [u8],
-        digest: &'static mut [u8; 32],
-        correct: &'static [u8; 32],
+        digest: &'static mut [u8; HMAC_SHA256_DIGEST_LEN],
+        correct: &'static [u8; HMAC_SHA256_DIGEST_LEN],
     ) -> Self {
         TestHmacSha256 {
             hmac,
@@ -59,7 +61,9 @@ impl<'a, H: digest::Digest<'a, 32> + HmacSha256> TestHmacSha256<'a, H> {
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32> + HmacSha256> digest::ClientData<32> for TestHmacSha256<'a, H> {
+impl<'a, H: digest::Digest<'a, HMAC_SHA256_DIGEST_LEN> + HmacSha256>
+    digest::ClientData<HMAC_SHA256_DIGEST_LEN> for TestHmacSha256<'a, H>
+{
     fn add_data_done(&self, _result: Result<(), ErrorCode>, _data: SubSlice<'static, u8>) {
         unimplemented!()
     }
@@ -93,10 +97,16 @@ impl<'a, H: digest::Digest<'a, 32> + HmacSha256> digest::ClientData<32> for Test
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32> + HmacSha256> digest::ClientHash<32> for TestHmacSha256<'a, H> {
-    fn hash_done(&self, _result: Result<(), ErrorCode>, digest: &'static mut [u8; 32]) {
+impl<'a, H: digest::Digest<'a, HMAC_SHA256_DIGEST_LEN> + HmacSha256>
+    digest::ClientHash<HMAC_SHA256_DIGEST_LEN> for TestHmacSha256<'a, H>
+{
+    fn hash_done(
+        &self,
+        _result: Result<(), ErrorCode>,
+        digest: &'static mut [u8; HMAC_SHA256_DIGEST_LEN],
+    ) {
         let mut error = false;
-        for i in 0..32 {
+        for i in 0..HMAC_SHA256_DIGEST_LEN {
             if self.correct[i] != digest[i] {
                 error = true;
                 break;
@@ -116,14 +126,20 @@ impl<'a, H: digest::Digest<'a, 32> + HmacSha256> digest::ClientHash<32> for Test
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32> + HmacSha256> digest::ClientVerify<32>
-    for TestHmacSha256<'a, H>
+impl<'a, H: digest::Digest<'a, HMAC_SHA256_DIGEST_LEN> + HmacSha256>
+    digest::ClientVerify<HMAC_SHA256_DIGEST_LEN> for TestHmacSha256<'a, H>
 {
-    fn verification_done(&self, _result: Result<bool, ErrorCode>, _compare: &'static mut [u8; 32]) {
+    fn verification_done(
+        &self,
+        _result: Result<bool, ErrorCode>,
+        _compare: &'static mut [u8; HMAC_SHA256_DIGEST_LEN],
+    ) {
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32> + HmacSha256> CapsuleTest for TestHmacSha256<'a, H> {
+impl<'a, H: digest::Digest<'a, HMAC_SHA256_DIGEST_LEN> + HmacSha256> CapsuleTest
+    for TestHmacSha256<'a, H>
+{
     fn set_client(&self, client: &'static dyn CapsuleTestClient) {
         self.client.set(client);
     }

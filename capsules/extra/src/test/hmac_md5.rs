@@ -14,22 +14,24 @@ use kernel::utilities::leasable_buffer::SubSlice;
 use kernel::utilities::leasable_buffer::SubSliceMut;
 use kernel::ErrorCode;
 
-pub struct TestHmacMd5<'a, H: digest::Digest<'a, 32>> {
+const HMAC_MD5_DIGEST_LEN: usize = 16;
+
+pub struct TestHmacMd5<'a, H: digest::Digest<'a, HMAC_MD5_DIGEST_LEN>> {
     hmac: &'a H,
-    key: TakeCell<'static, [u8]>,        // The key to use for HMAC
-    data: TakeCell<'static, [u8]>,       // The data to hash
-    digest: TakeCell<'static, [u8; 32]>, // The supplied hash
-    correct: &'static [u8; 32],          // The supplied hash
+    key: TakeCell<'static, [u8]>,  // The key to use for HMAC
+    data: TakeCell<'static, [u8]>, // The data to hash
+    digest: TakeCell<'static, [u8; HMAC_MD5_DIGEST_LEN]>, // The supplied hash
+    correct: &'static [u8; HMAC_MD5_DIGEST_LEN], // The supplied hash
     client: OptionalCell<&'static dyn CapsuleTestClient>,
 }
 
-impl<'a, H: digest::Digest<'a, 32> + HmacMd5> TestHmacMd5<'a, H> {
+impl<'a, H: digest::Digest<'a, HMAC_MD5_DIGEST_LEN> + HmacMd5> TestHmacMd5<'a, H> {
     pub fn new(
         hmac: &'a H,
         key: &'static mut [u8],
         data: &'static mut [u8],
-        digest: &'static mut [u8; 32],
-        correct: &'static [u8; 32],
+        digest: &'static mut [u8; HMAC_MD5_DIGEST_LEN],
+        correct: &'static [u8; HMAC_MD5_DIGEST_LEN],
     ) -> Self {
         TestHmacMd5 {
             hmac,
@@ -58,7 +60,9 @@ impl<'a, H: digest::Digest<'a, 32> + HmacMd5> TestHmacMd5<'a, H> {
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32>> digest::ClientData<32> for TestHmacMd5<'a, H> {
+impl<'a, H: digest::Digest<'a, HMAC_MD5_DIGEST_LEN>> digest::ClientData<HMAC_MD5_DIGEST_LEN>
+    for TestHmacMd5<'a, H>
+{
     fn add_data_done(&self, _result: Result<(), ErrorCode>, _data: SubSlice<'static, u8>) {
         unimplemented!()
     }
@@ -91,10 +95,16 @@ impl<'a, H: digest::Digest<'a, 32>> digest::ClientData<32> for TestHmacMd5<'a, H
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32>> digest::ClientHash<32> for TestHmacMd5<'a, H> {
-    fn hash_done(&self, _result: Result<(), ErrorCode>, digest: &'static mut [u8; 32]) {
+impl<'a, H: digest::Digest<'a, HMAC_MD5_DIGEST_LEN>> digest::ClientHash<HMAC_MD5_DIGEST_LEN>
+    for TestHmacMd5<'a, H>
+{
+    fn hash_done(
+        &self,
+        _result: Result<(), ErrorCode>,
+        digest: &'static mut [u8; HMAC_MD5_DIGEST_LEN],
+    ) {
         let mut error = false;
-        for i in 0..32 {
+        for i in 0..HMAC_MD5_DIGEST_LEN {
             if self.correct[i] != digest[i] {
                 error = true;
                 break;
@@ -114,12 +124,18 @@ impl<'a, H: digest::Digest<'a, 32>> digest::ClientHash<32> for TestHmacMd5<'a, H
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32>> digest::ClientVerify<32> for TestHmacMd5<'a, H> {
-    fn verification_done(&self, _result: Result<bool, ErrorCode>, _compare: &'static mut [u8; 32]) {
+impl<'a, H: digest::Digest<'a, HMAC_MD5_DIGEST_LEN>> digest::ClientVerify<HMAC_MD5_DIGEST_LEN>
+    for TestHmacMd5<'a, H>
+{
+    fn verification_done(
+        &self,
+        _result: Result<bool, ErrorCode>,
+        _compare: &'static mut [u8; HMAC_MD5_DIGEST_LEN],
+    ) {
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32>> CapsuleTest for TestHmacMd5<'a, H> {
+impl<'a, H: digest::Digest<'a, HMAC_MD5_DIGEST_LEN>> CapsuleTest for TestHmacMd5<'a, H> {
     fn set_client(&self, client: &'static dyn CapsuleTestClient) {
         self.client.set(client);
     }

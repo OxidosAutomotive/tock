@@ -18,13 +18,14 @@ use kernel::utilities::leasable_buffer::SubSlice;
 use kernel::utilities::leasable_buffer::SubSliceMut;
 use kernel::ErrorCode;
 
-// NOTE(frihetselsker): this number makes me nervous
-pub struct TestSha1<'a, H: digest::Digest<'a, 32>> {
+const SHA1_DIGEST_LEN: usize = 20;
+
+pub struct TestSha1<'a, H: digest::Digest<'a, SHA1_DIGEST_LEN>> {
     sha: &'a H,
-    data: TakeCell<'static, [u8]>,     // The data to hash
-    hash: TakeCell<'static, [u8; 32]>, // The supplied hash
-    position: Cell<usize>,             // Keep track of position in data
-    correct: Cell<bool>,               // Whether supplied hash is correct
+    data: TakeCell<'static, [u8]>,                  // The data to hash
+    hash: TakeCell<'static, [u8; SHA1_DIGEST_LEN]>, // The supplied hash
+    position: Cell<usize>,                          // Keep track of position in data
+    correct: Cell<bool>,                            // Whether supplied hash is correct
     client: OptionalCell<&'static dyn CapsuleTestClient>,
 }
 
@@ -33,11 +34,11 @@ pub struct TestSha1<'a, H: digest::Digest<'a, 32>> {
 // as well as zeroing out incomplete blocks).
 const CHUNK_SIZE: usize = 12;
 
-impl<'a, H: digest::Digest<'a, 32> + digest::Sha1> TestSha1<'a, H> {
+impl<'a, H: digest::Digest<'a, SHA1_DIGEST_LEN> + digest::Sha1> TestSha1<'a, H> {
     pub fn new(
         sha: &'a H,
         data: &'static mut [u8],
-        hash: &'static mut [u8; 32],
+        hash: &'static mut [u8; SHA1_DIGEST_LEN],
         correct: bool,
     ) -> Self {
         TestSha1 {
@@ -68,7 +69,9 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Sha1> TestSha1<'a, H> {
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32>> digest::ClientData<32> for TestSha1<'a, H> {
+impl<'a, H: digest::Digest<'a, SHA1_DIGEST_LEN>> digest::ClientData<SHA1_DIGEST_LEN>
+    for TestSha1<'a, H>
+{
     fn add_data_done(&self, _result: Result<(), ErrorCode>, _data: SubSlice<'static, u8>) {
         unimplemented!()
     }
@@ -113,8 +116,14 @@ impl<'a, H: digest::Digest<'a, 32>> digest::ClientData<32> for TestSha1<'a, H> {
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32>> digest::ClientVerify<32> for TestSha1<'a, H> {
-    fn verification_done(&self, result: Result<bool, ErrorCode>, compare: &'static mut [u8; 32]) {
+impl<'a, H: digest::Digest<'a, SHA1_DIGEST_LEN>> digest::ClientVerify<SHA1_DIGEST_LEN>
+    for TestSha1<'a, H>
+{
+    fn verification_done(
+        &self,
+        result: Result<bool, ErrorCode>,
+        compare: &'static mut [u8; SHA1_DIGEST_LEN],
+    ) {
         self.hash.put(Some(compare));
         debug!("Sha1Test: Verification result: {:?}", result);
         match result {
@@ -138,11 +147,18 @@ impl<'a, H: digest::Digest<'a, 32>> digest::ClientVerify<32> for TestSha1<'a, H>
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32>> digest::ClientHash<32> for TestSha1<'a, H> {
-    fn hash_done(&self, _result: Result<(), ErrorCode>, _digest: &'static mut [u8; 32]) {}
+impl<'a, H: digest::Digest<'a, SHA1_DIGEST_LEN>> digest::ClientHash<SHA1_DIGEST_LEN>
+    for TestSha1<'a, H>
+{
+    fn hash_done(
+        &self,
+        _result: Result<(), ErrorCode>,
+        _digest: &'static mut [u8; SHA1_DIGEST_LEN],
+    ) {
+    }
 }
 
-impl<'a, H: digest::Digest<'a, 32>> CapsuleTest for TestSha1<'a, H> {
+impl<'a, H: digest::Digest<'a, SHA1_DIGEST_LEN>> CapsuleTest for TestSha1<'a, H> {
     fn set_client(&self, client: &'static dyn CapsuleTestClient) {
         self.client.set(client);
     }

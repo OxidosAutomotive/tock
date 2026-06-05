@@ -18,11 +18,10 @@ use kernel::utilities::leasable_buffer::SubSlice;
 use kernel::utilities::leasable_buffer::SubSliceMut;
 use kernel::ErrorCode;
 
-// NOTE(frihetselsker): this number makes me nervous
-pub struct TestMd5<'a, H: digest::Digest<'a, 32>> {
+pub struct TestMd5<'a, H: digest::Digest<'a, 16>> {
     sha: &'a H,
     data: TakeCell<'static, [u8]>,     // The data to hash
-    hash: TakeCell<'static, [u8; 32]>, // The supplied hash
+    hash: TakeCell<'static, [u8; 16]>, // The supplied hash
     position: Cell<usize>,             // Keep track of position in data
     correct: Cell<bool>,               // Whether supplied hash is correct
     client: OptionalCell<&'static dyn CapsuleTestClient>,
@@ -33,11 +32,11 @@ pub struct TestMd5<'a, H: digest::Digest<'a, 32>> {
 // as well as zeroing out incomplete blocks).
 const CHUNK_SIZE: usize = 12;
 
-impl<'a, H: digest::Digest<'a, 32> + digest::Md5> TestMd5<'a, H> {
+impl<'a, H: digest::Digest<'a, 16> + digest::Md5> TestMd5<'a, H> {
     pub fn new(
         sha: &'a H,
         data: &'static mut [u8],
-        hash: &'static mut [u8; 32],
+        hash: &'static mut [u8; 16],
         correct: bool,
     ) -> Self {
         TestMd5 {
@@ -68,7 +67,7 @@ impl<'a, H: digest::Digest<'a, 32> + digest::Md5> TestMd5<'a, H> {
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32>> digest::ClientData<32> for TestMd5<'a, H> {
+impl<'a, H: digest::Digest<'a, 16>> digest::ClientData<16> for TestMd5<'a, H> {
     fn add_data_done(&self, _result: Result<(), ErrorCode>, _data: SubSlice<'static, u8>) {
         unimplemented!()
     }
@@ -113,8 +112,8 @@ impl<'a, H: digest::Digest<'a, 32>> digest::ClientData<32> for TestMd5<'a, H> {
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32>> digest::ClientVerify<32> for TestMd5<'a, H> {
-    fn verification_done(&self, result: Result<bool, ErrorCode>, compare: &'static mut [u8; 32]) {
+impl<'a, H: digest::Digest<'a, 16>> digest::ClientVerify<16> for TestMd5<'a, H> {
+    fn verification_done(&self, result: Result<bool, ErrorCode>, compare: &'static mut [u8; 16]) {
         self.hash.put(Some(compare));
         debug!("Md5Test: Verification result: {:?}", result);
         match result {
@@ -138,11 +137,11 @@ impl<'a, H: digest::Digest<'a, 32>> digest::ClientVerify<32> for TestMd5<'a, H> 
     }
 }
 
-impl<'a, H: digest::Digest<'a, 32>> digest::ClientHash<32> for TestMd5<'a, H> {
-    fn hash_done(&self, _result: Result<(), ErrorCode>, _digest: &'static mut [u8; 32]) {}
+impl<'a, H: digest::Digest<'a, 16>> digest::ClientHash<16> for TestMd5<'a, H> {
+    fn hash_done(&self, _result: Result<(), ErrorCode>, _digest: &'static mut [u8; 16]) {}
 }
 
-impl<'a, H: digest::Digest<'a, 32>> CapsuleTest for TestMd5<'a, H> {
+impl<'a, H: digest::Digest<'a, 16>> CapsuleTest for TestMd5<'a, H> {
     fn set_client(&self, client: &'static dyn CapsuleTestClient) {
         self.client.set(client);
     }
