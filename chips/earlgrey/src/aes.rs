@@ -10,7 +10,7 @@ use crate::registers::top_earlgrey::AES_BASE_ADDR;
 use core::cell::Cell;
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
 use kernel::hil;
-use kernel::hil::symmetric_encryption;
+use kernel::hil::symmetric_encryption::{self, AESKey};
 use kernel::hil::symmetric_encryption::{AES128, AES128_KEY_SIZE, AES_BLOCK_SIZE};
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::utilities::registers::interfaces::{Readable, Writeable};
@@ -334,7 +334,11 @@ impl<'a> hil::symmetric_encryption::AES<'a, AES128> for Aes<'a> {
         Ok(())
     }
 
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode> {
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
+        let key = match key {
+            AESKey::PlainText(key) => key,
+            _ => return Err(ErrorCode::INVAL),
+        };
         self.wait_on_idle_ready()?;
 
         if key.len() != AES128_KEY_SIZE {

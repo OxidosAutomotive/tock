@@ -9,7 +9,7 @@ use core::cell::Cell;
 use kernel::debug;
 use kernel::hil;
 use kernel::hil::symmetric_encryption::{
-    AESCtr, AES, AES128, AES128_KEY_SIZE, AESCBC, AESECB, AES_BLOCK_SIZE,
+    AESCtr, AESKey, AES, AES128, AES128_KEY_SIZE, AESCBC, AESECB, AES_BLOCK_SIZE,
 };
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::cells::TakeCell;
@@ -95,7 +95,7 @@ impl<'a, A: AES<'a, AES128> + AESECB> TestAes128Ecb<'a, A> {
                 key[i] = *b;
             }
 
-            assert!(self.aes.set_key(key) == Ok(()));
+            assert!(self.aes.set_key(AESKey::PlainText(key)) == Ok(()));
         });
 
         // Copy mode-appropriate source into source buffer
@@ -196,7 +196,7 @@ impl<'a, A: AES<'a, AES128> + AESCtr> TestAes128Ctr<'a, A> {
                 key[i] = *b;
             }
 
-            assert!(self.aes.set_key(key) == Ok(()));
+            assert!(self.aes.set_key(AESKey::PlainText(key)) == Ok(()));
         });
 
         // Copy mode-appropriate IV into IV buffer and configure it in the hardware
@@ -370,7 +370,7 @@ impl<'a, A: AES<'a, AES128> + AESCBC> TestAes128Cbc<'a, A> {
                 key[i] = *b;
             }
 
-            assert!(self.aes.set_key(key) == Ok(()));
+            assert!(self.aes.set_key(AESKey::PlainText(key)) == Ok(()));
         });
 
         // Copy mode-appropriate IV into IV buffer and configure it in the hardware

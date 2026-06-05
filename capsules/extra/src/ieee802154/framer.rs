@@ -87,7 +87,7 @@ use crate::net::stream::{encode_bytes, encode_u32, encode_u8};
 use core::cell::Cell;
 
 use kernel::hil::radio::{self, LQI_SIZE};
-use kernel::hil::symmetric_encryption::{CCMClient, AES128, AESCCM};
+use kernel::hil::symmetric_encryption::{AESKey, CCMClient, AES128, AESCCM};
 use kernel::processbuffer::ReadableProcessSlice;
 use kernel::utilities::cells::{MapCell, OptionalCell};
 use kernel::utilities::leasable_buffer::SubSliceMut;
@@ -547,7 +547,7 @@ impl<'a, M: Mac<'a>, A: AESCCM<'a, AES128>> Framer<'a, M, A> {
                                     (radio::PSDU_OFFSET, radio::PSDU_OFFSET + m_off);
 
                                 // Crypto setup failed; fail sending packet and return to idle
-                                if self.aes_ccm.set_key(&key) != Ok(())
+                                if self.aes_ccm.set_key(AESKey::PlainText(&key)) != Ok(())
                                     || self.aes_ccm.set_nonce(&nonce) != Ok(())
                                 {
                                     (TxState::Idle, Err((ErrorCode::FAIL, buf)))
@@ -614,7 +614,7 @@ impl<'a, M: Mac<'a>, A: AESCCM<'a, AES128>> Framer<'a, M, A> {
                             let (a_off, m_off) = (radio::PSDU_OFFSET, radio::PSDU_OFFSET + m_off);
 
                             // Crypto setup failed; fail receiving packet and return to idle
-                            if self.aes_ccm.set_key(&key) != Ok(())
+                            if self.aes_ccm.set_key(AESKey::PlainText(&key)) != Ok(())
                                 || self.aes_ccm.set_nonce(&nonce) != Ok(())
                             {
                                 // No error is returned for the receive function because recv occurs implicitly

@@ -87,7 +87,7 @@ use kernel::debug;
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
 use kernel::hil::symmetric_encryption;
 use kernel::hil::symmetric_encryption::{
-    AESCtr, AES, AES128, AES128_KEY_SIZE, AESCBC, AESECB, AES_BLOCK_SIZE, CCM_NONCE_LENGTH,
+    AESCtr, AESKey, AES, AES128, AES128_KEY_SIZE, AESCBC, AESECB, AES_BLOCK_SIZE, CCM_NONCE_LENGTH,
 };
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::ErrorCode;
@@ -409,7 +409,7 @@ impl<'a, A: AES<'a, AES128> + AESCtr + AESCBC + AESECB> VirtualAES128CCM<'a, A> 
         if res != Ok(()) {
             return res;
         }
-        let res = self.aes.set_key(&self.key.get());
+        let res = self.aes.set_key(AESKey::PlainText(&self.key.get()));
         if res != Ok(()) {
             return res;
         }
@@ -457,7 +457,7 @@ impl<'a, A: AES<'a, AES128> + AESCtr + AESCBC + AESECB> VirtualAES128CCM<'a, A> 
 
         self.aes.set_mode_aesctr(self.encrypting.get())?;
 
-        let res = self.aes.set_key(&self.key.get());
+        let res = self.aes.set_key(AESKey::PlainText(&self.key.get()));
         if res != Ok(()) {
             return res;
         }
@@ -664,7 +664,11 @@ impl<'a, A: AES<'a, AES128> + AESCtr + AESCBC + AESECB> symmetric_encryption::AE
         self.ccm_client.set(client);
     }
 
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode> {
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
+        let key = match key {
+            AESKey::PlainText(key) => key,
+            _ => return Err(ErrorCode::INVAL),
+        };
         if key.len() < AES128_KEY_SIZE {
             Err(ErrorCode::INVAL)
         } else {
@@ -735,7 +739,7 @@ impl<'a, A: AES<'a, AES128> + AESCtr + AESCBC + AESECB> symmetric_encryption::AE
         self.mux.client.set(client);
     }
 
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode> {
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
         if self.mux.inflight.is_none() {
             self.mux.aes.set_key(key)
         } else {

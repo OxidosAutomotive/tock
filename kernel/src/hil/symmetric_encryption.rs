@@ -42,6 +42,19 @@ impl AESKeySize for AES256 {
     const LENGTH: usize = 32;
 }
 
+// The AESKey enum is used because peripherals have different capabilities with
+// regards to key usage. The values of the enum have been though out in the following way:
+// Plaintext: normal keys, of either AES128 or AES256 size.
+// Wrapped:   keys which have previously been encrypted ("wrapped") in order to be able to
+//            securely store them in non-secure memory.
+// Id:        some peripherals, such as `nrf52840` have the capacity to use special keys not
+//            accesible to software for extra security, in such cases an ID can be provided.
+pub enum AESKey<'a> {
+    PlainText(&'a [u8]),
+    Wrapped(&'a [u8]),
+    Id(usize),
+}
+
 pub trait AES<'a, K: AESKeySize> {
     /// Enable the AES hardware.
     /// Must be called before any other methods
@@ -54,11 +67,12 @@ pub trait AES<'a, K: AESKeySize> {
     fn set_client(&'a self, client: &'a dyn Client<'a>);
 
     /// Set the encryption key.
-    /// Returns `INVAL` if length is not `AESKeySize::LENGTH`
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode>;
+    /// Returns `INVAL` if length is not `AESKeySize::LENGTH` or if
+    /// the peripheral doesn't support the key type
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode>;
 
     /// Set the IV (or initial counter).
-    /// Returns `INVAL` if length is not `AES_BLOCK_SIZE`
+    /// Returns `INVAL` if length is not `AES_IV_SIZE`
     fn set_iv(&self, iv: &[u8]) -> Result<(), ErrorCode>;
 
     /// Begin a new message (with the configured IV) when `crypt()` is
@@ -149,7 +163,9 @@ pub trait AESCCM<'a, K: AESKeySize> {
     fn set_client(&'a self, client: &'a dyn CCMClient);
 
     /// Set the key to be used for CCM encryption
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode>;
+    /// Returns `INVAL` if length is not `AESKeySize::LENGTH`or if
+    /// the peripheral doesn't support the key type
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode>;
 
     /// Set the nonce (length NONCE_LENGTH) to be used for CCM encryption
     fn set_nonce(&self, nonce: &[u8]) -> Result<(), ErrorCode>;
@@ -182,8 +198,9 @@ pub trait AESGCM<'a, K: AESKeySize> {
     fn set_client(&'a self, client: &'a dyn GCMClient);
 
     /// Set the key to be used for GCM encryption
-    /// Returns `INVAL` if length is not `AESKeySize::LENGTH`
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode>;
+    /// Returns `INVAL` if length is not `AESKeySize::LENGTH`or if
+    /// the peripheral doesn't support the key type
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode>;
 
     /// Set the IV to be used for GCM encryption. The IV should be less
     /// or equal to 12 bytes (96 bits) as recommened in NIST-800-38D.

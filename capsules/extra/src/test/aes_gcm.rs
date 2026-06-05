@@ -6,7 +6,7 @@
 
 use core::cell::Cell;
 use kernel::debug;
-use kernel::hil::symmetric_encryption::{GCMClient, AES128, AES128_KEY_SIZE, AESGCM};
+use kernel::hil::symmetric_encryption::{AESKey, GCMClient, AES128, AES128_KEY_SIZE, AESGCM};
 use kernel::utilities::cells::TakeCell;
 use kernel::ErrorCode;
 
@@ -93,7 +93,7 @@ impl<'a, A: AESGCM<'a, AES128>> Test<'a, A> {
             buf[pt_off + pt_len..(pt_off + pt_len + tag.len())].copy_from_slice(tag);
         }
 
-        if self.aes_gcm.set_key(key) != Ok(()) {
+        if self.aes_gcm.set_key(AESKey::PlainText(key)) != Ok(()) {
             panic!("aes_gcm_test failed: cannot set key.");
         }
 

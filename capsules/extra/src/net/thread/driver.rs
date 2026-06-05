@@ -57,7 +57,7 @@ use kernel::capabilities::UdpDriverCapability;
 use kernel::errorcode::into_statuscode;
 use kernel::grant::{AllowRoCount, AllowRwCount, Grant, UpcallCount};
 use kernel::hil::symmetric_encryption::CCMClient;
-use kernel::hil::symmetric_encryption::{AES128, AESCCM};
+use kernel::hil::symmetric_encryption::{AESKey, AES128, AESCCM};
 use kernel::hil::time;
 use kernel::processbuffer::ReadableProcessBuffer;
 use kernel::syscall::{CommandReturn, SyscallDriver};
@@ -350,7 +350,10 @@ impl<'a, A: time::Alarm<'a>> ThreadNetworkDriver<'a, A> {
         let mic_len = security.level.mic_len();
         match mle_key {
             Some(netkey) => {
-                if self.aes_crypto.set_key(&netkey.mle_key).is_err()
+                if self
+                    .aes_crypto
+                    .set_key(AESKey::PlainText(&netkey.mle_key))
+                    .is_err()
                     || self.aes_crypto.set_nonce(&nonce).is_err()
                 {
                     // UNCOMMENT TO DEBUG THREAD //

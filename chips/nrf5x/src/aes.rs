@@ -38,6 +38,7 @@
 use core::cell::Cell;
 use core::ptr::addr_of;
 use kernel::hil::symmetric_encryption;
+use kernel::hil::symmetric_encryption::AESKey;
 use kernel::hil::symmetric_encryption::AES128;
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::cells::TakeCell;
@@ -446,7 +447,11 @@ impl<'a> kernel::hil::symmetric_encryption::AES<'a, AES128> for AesECB<'a> {
         self.client.set(client);
     }
 
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode> {
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
+        let key = match key {
+            AESKey::PlainText(key) => key,
+            _ => return Err(ErrorCode::INVAL),
+        };
         if key.len() != symmetric_encryption::AES128_KEY_SIZE {
             Err(ErrorCode::INVAL)
         } else {
@@ -538,7 +543,7 @@ impl<'a> kernel::hil::symmetric_encryption::AESCCM<'a, AES128> for AesECB<'a> {
     fn set_client(&'a self, _client: &'a dyn kernel::hil::symmetric_encryption::CCMClient) {}
 
     /// Set the key to be used for CCM encryption
-    fn set_key(&self, _key: &[u8]) -> Result<(), ErrorCode> {
+    fn set_key(&self, _key: AESKey) -> Result<(), ErrorCode> {
         Ok(())
     }
 

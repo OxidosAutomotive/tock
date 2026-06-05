@@ -17,7 +17,7 @@ use ghash::GHash;
 use ghash::Key;
 use kernel::hil::symmetric_encryption;
 use kernel::hil::symmetric_encryption::{
-    AESCtr, AES, AES128, AES128_KEY_SIZE, AESCBC, AESCCM, AESECB, AES_BLOCK_SIZE,
+    AESCtr, AESKey, AES, AES128, AES128_KEY_SIZE, AESCBC, AESCCM, AESECB, AES_BLOCK_SIZE,
 };
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::ErrorCode;
@@ -76,7 +76,7 @@ impl<'a, A: AES<'a, AES128> + AESCtr + AESCBC + AESECB + AESCCM<'a, AES128>> Aes
     fn start_ctr_encrypt(&self) -> Result<(), ErrorCode> {
         self.aes.set_mode_aesctr(self.encrypting.get())?;
 
-        let res = AES::set_key(self.aes, &self.key.get());
+        let res = AES::set_key(self.aes, AESKey::PlainText(&self.key.get()));
         if res != Ok(()) {
             return res;
         }
@@ -120,7 +120,7 @@ impl<'a, A: AES<'a, AES128> + AESCtr + AESCBC + AESECB + AESCCM<'a, AES128>> Aes
         self.encrypting.set(encrypting);
 
         self.aes.set_mode_aesctr(self.encrypting.get()).unwrap();
-        AES::set_key(self.aes, &self.key.get()).unwrap();
+        AES::set_key(self.aes, AESKey::PlainText(&self.key.get())).unwrap();
         self.aes.set_iv(&[0; AES_BLOCK_SIZE]).unwrap();
 
         self.aes.start_message();
@@ -165,7 +165,11 @@ impl<'a, A: AES<'a, AES128> + AESCtr + AESCBC + AESECB + AESCCM<'a, AES128>>
         self.gcm_client.set(client);
     }
 
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode> {
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
+        let key = match key {
+            AESKey::PlainText(key) => key,
+            _ => return Err(ErrorCode::INVAL),
+        };
         if key.len() < AES128_KEY_SIZE {
             Err(ErrorCode::INVAL)
         } else {
@@ -233,7 +237,7 @@ impl<'a, A: AES<'a, AES128> + AESCtr + AESCBC + AESECB + AESCCM<'a, AES128>>
         self.client.set(client);
     }
 
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode> {
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
         AES::set_key(self.aes, key)
     }
 
@@ -269,7 +273,7 @@ impl<
         self.ccm_client.set(client);
     }
 
-    fn set_key(&self, key: &[u8]) -> Result<(), ErrorCode> {
+    fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
         AESCCM::set_key(self.aes, key)
     }
 

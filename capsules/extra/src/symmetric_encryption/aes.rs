@@ -13,7 +13,7 @@ use core::marker::PhantomData;
 
 use kernel::grant::{AllowRoCount, AllowRwCount, Grant, UpcallCount};
 use kernel::hil::symmetric_encryption::{
-    AESCtr, AESKeySize, CCMClient, Client, GCMClient, AES, AESCBC, AESCCM, AESECB, AESGCM,
+    AESCtr, AESKey, AESKeySize, CCMClient, Client, GCMClient, AES, AESCBC, AESCCM, AESECB, AESGCM,
     AES_BLOCK_SIZE,
 };
 use kernel::processbuffer::{ReadableProcessBuffer, WriteableProcessBuffer};
@@ -125,15 +125,15 @@ impl<
                                             AesOperation::AESCtr(_)
                                             | AesOperation::AESCBC(_)
                                             | AesOperation::AESECB(_) => {
-                                                AES::set_key(self.aes, buf)?;
+                                                AES::set_key(self.aes, AESKey::PlainText(buf))?;
                                                 Ok(())
                                             }
                                             AesOperation::AESCCM(_) => {
-                                                AESCCM::set_key(self.aes, buf)?;
+                                                AESCCM::set_key(self.aes, AESKey::PlainText(buf))?;
                                                 Ok(())
                                             }
                                             AesOperation::AESGCM(_) => {
-                                                AESGCM::set_key(self.aes, buf)?;
+                                                AESGCM::set_key(self.aes, AESKey::PlainText(buf))?;
                                                 Ok(())
                                             }
                                         }

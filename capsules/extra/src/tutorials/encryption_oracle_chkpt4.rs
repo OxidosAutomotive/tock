@@ -5,7 +5,7 @@
 use core::cell::Cell;
 
 use kernel::grant::{AllowRoCount, AllowRwCount, Grant, UpcallCount};
-use kernel::hil::symmetric_encryption::{AESCtr, Client, AES, AES128, AES_BLOCK_SIZE};
+use kernel::hil::symmetric_encryption::{AESCtr, AESKey, Client, AES, AES128, AES_BLOCK_SIZE};
 use kernel::processbuffer::ReadableProcessBuffer;
 use kernel::syscall::{CommandReturn, SyscallDriver};
 use kernel::utilities::cells::{OptionalCell, TakeCell};
@@ -155,7 +155,7 @@ impl<'a, A: AES<'a, AES128> + AESCtr> EncryptionOracleDriver<'a, A> {
                     // make this a decryption operation:
                     self.aes.set_mode_aesctr(true)?;
 
-                    self.aes.set_key(KEY)?;
+                    self.aes.set_key(AESKey::PlainText(KEY))?;
 
                     // Set the initialization vector:
                     kernel_data
