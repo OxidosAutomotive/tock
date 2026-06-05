@@ -10,14 +10,10 @@ use crate::dma::{ChannelId, Dma};
 
 use cortexm33::dma_fence::CortexMDmaFence;
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
-use kernel::hil::digest::{
-    Bit16Data, Bit1Data, Bit32Data, Bit8Data, Client, Digest, DigestData, DigestHash, DigestVerify,
-    HmacMd5, HmacSha1, HmacSha224, HmacSha256, HmacSha384, HmacSha512, Md5, Sha1, Sha224, Sha256,
-    Sha384, Sha512,
-};
+use kernel::hil::digest::{self, DigestHash};
 use kernel::utilities::cells::{MapCell, OptionalCell};
 use kernel::utilities::dma_slice::{DmaSubSlice, DmaSubSliceMut, DmaSubSliceMutImmut};
-use kernel::utilities::leasable_buffer::SubSliceMutImmut;
+use kernel::utilities::leasable_buffer::{SubSlice, SubSliceMut, SubSliceMutImmut};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
 use kernel::utilities::registers::{
     register_bitfields, register_structs, ReadOnly, ReadWrite, WriteOnly,
@@ -151,7 +147,7 @@ const MAX_DIGEST_LEN: usize = 32;
 const LONG_HMAC_KEY_LEN: usize = 64;
 // It is an artificial limitation for compatibility with capsules.
 // Taken from boards::components::hmac
-const MAX_HMAC_KEY_LEN: usize = 512 / 8;
+const MAX_HMAC_KEY_LEN: usize = 1024 / 8;
 
 #[derive(Clone, Copy)]
 enum Mode {
@@ -182,7 +178,69 @@ enum State {
     HmacFinalize,
 }
 
-pub struct Leftover {
+#[derive(Clone, Copy)]
+enum HashClient<'a, const DIGEST_LEN: usize> {
+    Single(
+        Option<&'a dyn digest::ClientData<DIGEST_LEN>>,
+        Option<&'a dyn digest::ClientHash<DIGEST_LEN>>,
+        Option<&'a dyn digest::ClientVerify<DIGEST_LEN>>,
+    ),
+    DoubleHash(&'a dyn digest::ClientDataHash<DIGEST_LEN>),
+    DoubleVerify(&'a dyn digest::ClientDataVerify<DIGEST_LEN>),
+    Full(&'a dyn digest::Client<DIGEST_LEN>),
+}
+
+impl<'a, const DIGEST_LEN: usize> HashClient<'a, DIGEST_LEN> {
+    pub fn add_data_done(&self, result: Result<(), ErrorCode>, data: SubSlice<'static, u8>) {
+        match self {
+            Self::Single(client_data, _, _) => {
+                client_data.map(|c| c.add_data_done(result, data));
+            }
+            Self::DoubleHash(client) => client.add_data_done(result, data),
+            Self::DoubleVerify(client) => client.add_data_done(result, data),
+            Self::Full(client) => client.add_data_done(result, data),
+        };
+    }
+
+    fn add_mut_data_done(&self, result: Result<(), ErrorCode>, data: SubSliceMut<'static, u8>) {
+        match self {
+            Self::Single(client_data, _, _) => {
+                client_data.map(|c| c.add_mut_data_done(result, data));
+            }
+            Self::DoubleHash(client) => client.add_mut_data_done(result, data),
+            Self::DoubleVerify(client) => client.add_mut_data_done(result, data),
+            Self::Full(client) => client.add_mut_data_done(result, data),
+        };
+    }
+
+    fn hash_done(&self, result: Result<(), ErrorCode>, digest: &'static mut [u8; DIGEST_LEN]) {
+        match self {
+            Self::Single(_, client_hash, _) => {
+                client_hash.map(|c| c.hash_done(result, digest));
+            }
+            Self::DoubleHash(client) => client.hash_done(result, digest),
+            Self::Full(client) => client.hash_done(result, digest),
+            _ => (),
+        };
+    }
+
+    fn verification_done(
+        &self,
+        result: Result<bool, ErrorCode>,
+        compare: &'static mut [u8; DIGEST_LEN],
+    ) {
+        match self {
+            Self::Single(_, _, client_verify) => {
+                client_verify.map(|c| c.verification_done(result, compare));
+            }
+            Self::DoubleVerify(client) => client.verification_done(result, compare),
+            Self::Full(client) => client.verification_done(result, compare),
+            _ => (),
+        };
+    }
+}
+
+struct Leftover {
     buffer: Cell<Option<u32>>,
     // it is used if the FIFO is full and we cannot write the leftover we collected.
     // unfortunately, it is not possible to extend the subslice, I could have written the leftover on top of it.
@@ -251,7 +309,7 @@ impl Leftover {
     }
 }
 
-pub struct HmacKey {
+struct HmacKey {
     key: MapCell<[u8; MAX_HMAC_KEY_LEN]>,
     index: Cell<usize>,
     len: Cell<usize>,
@@ -291,10 +349,6 @@ impl HmacKey {
         self.key.is_some()
     }
 
-    pub fn len(&self) -> usize {
-        self.len.get()
-    }
-
     pub fn is_loaded(&self) -> bool {
         self.index.get() == self.len.get()
     }
@@ -330,7 +384,8 @@ pub struct Hash<'a> {
     cancelled: Cell<bool>,
     // How to be more flexible in this field?
     // THIS IS CRITICAL
-    client: OptionalCell<&'a dyn Client<MAX_DIGEST_LEN>>,
+    // client: OptionalCell<&'a dyn Client<MAX_DIGEST_LEN>>,
+    client: OptionalCell<HashClient<'a, MAX_DIGEST_LEN>>,
     digest: OptionalCell<&'static mut [u8; MAX_DIGEST_LEN]>, // Maximum length that can be used
     deferred_call: DeferredCall,
 }
@@ -441,10 +496,12 @@ impl Hash<'_> {
                 match (state, self.cancelled.get()) {
                     (State::HmacFinalize | State::Run, true) => {
                         regs.cr.modify(CR::INIT::SET);
+
                         self.client.map(|client| {
                             if let Some(digest) = self.digest.take() {
                                 if self.verify.get() {
-                                    client.verification_done(Err(kernel::ErrorCode::CANCEL), digest)
+                                    client
+                                        .verification_done(Err(kernel::ErrorCode::CANCEL), digest);
                                 } else {
                                     client.hash_done(Err(kernel::ErrorCode::CANCEL), digest);
                                 }
@@ -481,7 +538,8 @@ impl Hash<'_> {
                         self.client.map(|client| {
                             if let Some(digest) = self.digest.take() {
                                 if self.verify.get() {
-                                    client.verification_done(Err(kernel::ErrorCode::CANCEL), digest)
+                                    client
+                                        .verification_done(Err(kernel::ErrorCode::CANCEL), digest);
                                 } else {
                                     client.hash_done(Err(kernel::ErrorCode::CANCEL), digest);
                                 }
@@ -813,9 +871,15 @@ impl Hash<'_> {
     }
 }
 
-impl<'a> DigestHash<'a, 32> for Hash<'a> {
-    fn set_hash_client(&'a self, _client: &'a dyn kernel::hil::digest::ClientHash<32>) {
-        unimplemented!();
+impl<'a> digest::DigestHash<'a, 32> for Hash<'a> {
+    fn set_hash_client(&'a self, client: &'a dyn kernel::hil::digest::ClientHash<32>) {
+        if let Some(HashClient::Single(data, _, verify)) = self.client.get() {
+            self.client
+                .set(HashClient::Single(data, Some(client), verify));
+        } else {
+            self.client
+                .set(HashClient::Single(None, Some(client), None));
+        }
     }
 
     fn run(
@@ -865,9 +929,15 @@ impl crate::dma::DmaClient for Hash<'_> {
     }
 }
 
-impl<'a> DigestData<'a, 32> for Hash<'a> {
-    fn set_data_client(&'a self, _client: &'a dyn kernel::hil::digest::ClientData<32>) {
-        unimplemented!();
+impl<'a> digest::DigestData<'a, 32> for Hash<'a> {
+    fn set_data_client(&'a self, client: &'a dyn kernel::hil::digest::ClientData<32>) {
+        if let Some(HashClient::Single(_, hash, verify)) = self.client.get() {
+            self.client
+                .set(HashClient::Single(Some(client), hash, verify));
+        } else {
+            self.client
+                .set(HashClient::Single(Some(client), None, None));
+        }
     }
 
     fn add_data(
@@ -1020,9 +1090,15 @@ impl<'a> DigestData<'a, 32> for Hash<'a> {
     }
 }
 
-impl<'a> DigestVerify<'a, 32> for Hash<'a> {
-    fn set_verify_client(&'a self, _client: &'a dyn kernel::hil::digest::ClientVerify<32>) {
-        unimplemented!();
+impl<'a> digest::DigestVerify<'a, 32> for Hash<'a> {
+    fn set_verify_client(&'a self, client: &'a dyn kernel::hil::digest::ClientVerify<32>) {
+        if let Some(HashClient::Single(data, hash, _)) = self.client.get() {
+            self.client
+                .set(HashClient::Single(data, hash, Some(client)));
+        } else {
+            self.client
+                .set(HashClient::Single(None, None, Some(client)));
+        }
     }
 
     fn verify(
@@ -1034,13 +1110,25 @@ impl<'a> DigestVerify<'a, 32> for Hash<'a> {
     }
 }
 
-impl<'a> Digest<'a, 32> for Hash<'a> {
-    fn set_client(&'a self, client: &'a dyn Client<32>) {
-        self.client.set(client);
+impl<'a> digest::Digest<'a, 32> for Hash<'a> {
+    fn set_client(&'a self, client: &'a dyn digest::Client<32>) {
+        self.client.set(HashClient::Full(client));
     }
 }
 
-impl Md5 for Hash<'_> {
+impl<'a> digest::DigestDataHash<'a, 32> for Hash<'a> {
+    fn set_client(&'a self, client: &'a dyn digest::ClientDataHash<32>) {
+        self.client.set(HashClient::DoubleHash(client));
+    }
+}
+
+impl<'a> digest::DigestDataVerify<'a, 32> for Hash<'a> {
+    fn set_client(&'a self, client: &'a dyn digest::ClientDataVerify<32>) {
+        self.client.set(HashClient::DoubleVerify(client));
+    }
+}
+
+impl digest::Md5 for Hash<'_> {
     fn set_mode_md5(&self) -> Result<(), ErrorCode> {
         if self.state.get().is_some() {
             return Err(kernel::ErrorCode::BUSY);
@@ -1058,7 +1146,7 @@ impl Md5 for Hash<'_> {
     }
 }
 
-impl Sha1 for Hash<'_> {
+impl digest::Sha1 for Hash<'_> {
     fn set_mode_sha1(&self) -> Result<(), ErrorCode> {
         if self.state.get().is_some() {
             return Err(kernel::ErrorCode::BUSY);
@@ -1075,7 +1163,7 @@ impl Sha1 for Hash<'_> {
     }
 }
 
-impl Sha224 for Hash<'_> {
+impl digest::Sha224 for Hash<'_> {
     fn set_mode_sha224(&self) -> Result<(), kernel::ErrorCode> {
         if self.state.get().is_some() {
             return Err(kernel::ErrorCode::BUSY);
@@ -1093,7 +1181,7 @@ impl Sha224 for Hash<'_> {
     }
 }
 
-impl Sha256 for Hash<'_> {
+impl digest::Sha256 for Hash<'_> {
     fn set_mode_sha256(&self) -> Result<(), kernel::ErrorCode> {
         if self.state.get().is_some() {
             return Err(kernel::ErrorCode::BUSY);
@@ -1111,7 +1199,7 @@ impl Sha256 for Hash<'_> {
     }
 }
 
-impl HmacSha256 for Hash<'_> {
+impl digest::HmacSha256 for Hash<'_> {
     fn set_mode_hmacsha256(&self, key: &[u8]) -> Result<(), kernel::ErrorCode> {
         if self.state.get().is_some() {
             return Err(ErrorCode::BUSY);
@@ -1131,19 +1219,19 @@ impl HmacSha256 for Hash<'_> {
     }
 }
 
-impl Sha384 for Hash<'_> {
+impl digest::Sha384 for Hash<'_> {
     fn set_mode_sha384(&self) -> Result<(), kernel::ErrorCode> {
         Err(kernel::ErrorCode::NOSUPPORT)
     }
 }
 
-impl Sha512 for Hash<'_> {
+impl digest::Sha512 for Hash<'_> {
     fn set_mode_sha512(&self) -> Result<(), kernel::ErrorCode> {
         Err(kernel::ErrorCode::NOSUPPORT)
     }
 }
 
-impl HmacMd5 for Hash<'_> {
+impl digest::HmacMd5 for Hash<'_> {
     fn set_mode_hmacmd5(&self, key: &[u8]) -> Result<(), ErrorCode> {
         if self.state.get().is_some() {
             return Err(ErrorCode::BUSY);
@@ -1162,7 +1250,7 @@ impl HmacMd5 for Hash<'_> {
     }
 }
 
-impl HmacSha1 for Hash<'_> {
+impl digest::HmacSha1 for Hash<'_> {
     fn set_mode_hmacsha1(&self, key: &[u8]) -> Result<(), ErrorCode> {
         if self.state.get().is_some() {
             return Err(ErrorCode::BUSY);
@@ -1181,7 +1269,7 @@ impl HmacSha1 for Hash<'_> {
     }
 }
 
-impl HmacSha224 for Hash<'_> {
+impl digest::HmacSha224 for Hash<'_> {
     fn set_mode_hmacsha224(&self, key: &[u8]) -> Result<(), ErrorCode> {
         if self.state.get().is_some() {
             return Err(ErrorCode::BUSY);
@@ -1201,40 +1289,40 @@ impl HmacSha224 for Hash<'_> {
     }
 }
 
-impl HmacSha384 for Hash<'_> {
+impl digest::HmacSha384 for Hash<'_> {
     fn set_mode_hmacsha384(&self, _key: &[u8]) -> Result<(), kernel::ErrorCode> {
         Err(kernel::ErrorCode::NOSUPPORT)
     }
 }
 
-impl HmacSha512 for Hash<'_> {
+impl digest::HmacSha512 for Hash<'_> {
     fn set_mode_hmacsha512(&self, _key: &[u8]) -> Result<(), kernel::ErrorCode> {
         Err(kernel::ErrorCode::NOSUPPORT)
     }
 }
 
-impl Bit32Data for Hash<'_> {
+impl digest::Bit32Data for Hash<'_> {
     fn set_data_type_32_bit(&self) -> Result<(), ErrorCode> {
         self.regs.cr.modify(CR::DATATYPE::_32bitData);
         Ok(())
     }
 }
 
-impl Bit16Data for Hash<'_> {
+impl digest::Bit16Data for Hash<'_> {
     fn set_data_type_16_bit(&self) -> Result<(), ErrorCode> {
         self.regs.cr.modify(CR::DATATYPE::_16bitData);
         Ok(())
     }
 }
 
-impl Bit8Data for Hash<'_> {
+impl digest::Bit8Data for Hash<'_> {
     fn set_data_type_8_bit(&self) -> Result<(), ErrorCode> {
         self.regs.cr.modify(CR::DATATYPE::_8bitData);
         Ok(())
     }
 }
 
-impl Bit1Data for Hash<'_> {
+impl digest::Bit1Data for Hash<'_> {
     fn set_data_type_1_bit(&self) -> Result<(), ErrorCode> {
         self.regs.cr.modify(CR::DATATYPE::_1bitData);
         Ok(())

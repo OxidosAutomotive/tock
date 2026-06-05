@@ -9,11 +9,6 @@ use crate::ErrorCode;
 use crate::utilities::leasable_buffer::SubSlice;
 use crate::utilities::leasable_buffer::SubSliceMut;
 
-const MD5_DIGEST_LEN: usize = 16;
-const SHA1_DIGEST_LEN: usize = 20;
-const SHA224_DIGEST_LEN: usize = 28;
-const SHA256_DIGEST_LEN: usize = 32;
-
 /// Implement this trait and use `set_client()` in order to receive callbacks
 /// when data has been added to a digest.
 ///
@@ -287,10 +282,12 @@ pub trait DigestDataVerify<'a, const DIGEST_LEN: usize>:
 }
 
 pub trait Md5 {
+    /// Call before adding data to perform Md5
     fn set_mode_md5(&self) -> Result<(), ErrorCode>;
 }
 
 pub trait Sha1 {
+    /// Call before adding data to perform Sha1
     fn set_mode_sha1(&self) -> Result<(), ErrorCode>;
 }
 

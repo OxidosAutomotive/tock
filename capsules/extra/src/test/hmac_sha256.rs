@@ -1,24 +1,22 @@
 // Licensed under the Apache License, Version 2.0 or the MIT License.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright Tock Contributors 2022.
+// Copyright Oxidos Automotive 2026.
 
 //! Test the software implementation of HMAC-SHA256 by performing a hash and
 //! checking it against the expected hash value.
 
-use crate::hmac_sha256::HmacSha256Software;
-use crate::sha256::Sha256Software;
 use capsules_core::test::capsule_test::{CapsuleTest, CapsuleTestClient, CapsuleTestError};
 use kernel::hil::digest;
 use kernel::hil::digest::HmacSha256;
-use kernel::hil::digest::{DigestData, DigestHash};
 use kernel::utilities::cells::OptionalCell;
 use kernel::utilities::cells::TakeCell;
 use kernel::utilities::leasable_buffer::SubSlice;
 use kernel::utilities::leasable_buffer::SubSliceMut;
 use kernel::ErrorCode;
 
-pub struct TestHmacSha256 {
-    hmac: &'static HmacSha256Software<'static, Sha256Software<'static>>,
+pub struct TestHmacSha256<'a, H: digest::Digest<'a, 32>> {
+    hmac: &'a H,
     key: TakeCell<'static, [u8]>,        // The key to use for HMAC
     data: TakeCell<'static, [u8]>,       // The data to hash
     digest: TakeCell<'static, [u8; 32]>, // The supplied hash
@@ -26,9 +24,9 @@ pub struct TestHmacSha256 {
     client: OptionalCell<&'static dyn CapsuleTestClient>,
 }
 
-impl TestHmacSha256 {
+impl<'a, H: digest::Digest<'a, 32> + HmacSha256> TestHmacSha256<'a, H> {
     pub fn new(
-        hmac: &'static HmacSha256Software<'static, Sha256Software<'static>>,
+        hmac: &'a H,
         key: &'static mut [u8],
         data: &'static mut [u8],
         digest: &'static mut [u8; 32],
@@ -61,7 +59,7 @@ impl TestHmacSha256 {
     }
 }
 
-impl digest::ClientData<32> for TestHmacSha256 {
+impl<'a, H: digest::Digest<'a, 32> + HmacSha256> digest::ClientData<32> for TestHmacSha256<'a, H> {
     fn add_data_done(&self, _result: Result<(), ErrorCode>, _data: SubSlice<'static, u8>) {
         unimplemented!()
     }
@@ -95,7 +93,7 @@ impl digest::ClientData<32> for TestHmacSha256 {
     }
 }
 
-impl digest::ClientHash<32> for TestHmacSha256 {
+impl<'a, H: digest::Digest<'a, 32> + HmacSha256> digest::ClientHash<32> for TestHmacSha256<'a, H> {
     fn hash_done(&self, _result: Result<(), ErrorCode>, digest: &'static mut [u8; 32]) {
         let mut error = false;
         for i in 0..32 {
@@ -118,12 +116,14 @@ impl digest::ClientHash<32> for TestHmacSha256 {
     }
 }
 
-impl digest::ClientVerify<32> for TestHmacSha256 {
+impl<'a, H: digest::Digest<'a, 32> + HmacSha256> digest::ClientVerify<32>
+    for TestHmacSha256<'a, H>
+{
     fn verification_done(&self, _result: Result<bool, ErrorCode>, _compare: &'static mut [u8; 32]) {
     }
 }
 
-impl CapsuleTest for TestHmacSha256 {
+impl<'a, H: digest::Digest<'a, 32> + HmacSha256> CapsuleTest for TestHmacSha256<'a, H> {
     fn set_client(&self, client: &'static dyn CapsuleTestClient) {
         self.client.set(client);
     }

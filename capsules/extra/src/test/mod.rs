@@ -10,7 +10,6 @@ pub mod hmac_md5;
 pub mod hmac_sha1;
 pub mod hmac_sha224;
 pub mod hmac_sha256;
-pub mod hmac_sha256_hw;
 pub mod kv_system;
 pub mod md5;
 pub mod sha1;
