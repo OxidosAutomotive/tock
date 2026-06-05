@@ -20,6 +20,7 @@ pub trait Client<'a> {
 pub const AES_BLOCK_SIZE: usize = 16;
 pub const AES128_KEY_SIZE: usize = 16;
 pub const AES256_KEY_SIZE: usize = 32;
+pub const AES_IV_SIZE: usize = 16;
 
 mod sealed {
     pub trait Sealed {}
@@ -202,4 +203,15 @@ pub trait AESGCM<'a, K: AESKeySize> {
         tag_len: usize,
         encrypting: bool,
     ) -> Result<(), (ErrorCode, &'static mut [u8])>;
+}
+
+pub trait WrappedKeyClient<K: AESKeySize> {
+    fn wrapping_done(&self, wrapped_key: &'static mut [u8]);
+}
+
+pub trait AESKeyWrapper<K: AESKeySize> {
+    fn set_iv_for_wrapping(&self, iv: &[u8]) -> Result<(), ErrorCode>;
+    
+    fn wrap_key(&self, key: &'static mut [u8], wrapping: bool) -> Result<(), ErrorCode>;
+    fn set_wrapped_key(&self, key: &[u8]) -> Result<(), ErrorCode>;
 }
