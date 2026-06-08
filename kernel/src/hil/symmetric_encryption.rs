@@ -51,7 +51,7 @@ impl AESKeySize for AES256 {
 //            accesible to software for extra security, in such cases an ID can be provided.
 pub enum AESKey<'a> {
     PlainText(&'a [u8]),
-    Wrapped(&'a [u8]),
+    Wrapped(&'a [u8], usize),
     Id(usize),
 }
 

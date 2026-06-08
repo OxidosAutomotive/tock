@@ -43,126 +43,126 @@ register_structs! {
     }
 }
 register_bitfields![u32,
-CR [
-    /// IPRST
-    IPRST OFFSET(31) NUMBITS(1) [],
-    /// KEYSEL
-    KEYSEL OFFSET(28) NUMBITS(3) [
-        /// Software key, loaded in key registers SAES_KEYx
-        SOFTWARE = 0b000,
-        /// Derived hardware unique key
-        DHUK = 0b001,
-        /// Boot hardware key
-        BHK = 0b010,
-        /// XOR of DHUK and BHK
-        XOR_DHUK_BHK = 0b100,
-        /// Test mode, 256 bit (0xA5A5A5...A5A5)
-        TEST = 0b111
+    CR [
+        /// IPRST
+        IPRST OFFSET(31) NUMBITS(1) [],
+        /// KEYSEL
+        KEYSEL OFFSET(28) NUMBITS(3) [
+            /// Software key, loaded in key registers SAES_KEYx
+            SOFTWARE = 0b000,
+            /// Derived hardware unique key
+            DHUK = 0b001,
+            /// Boot hardware key
+            BHK = 0b010,
+            /// XOR of DHUK and BHK
+            XOR_DHUK_BHK = 0b100,
+            /// Test mode, 256 bit (0xA5A5A5...A5A5)
+            TEST = 0b111
+        ],
+        /// KSHAREID
+        KSHAREID OFFSET(26) NUMBITS(2) [
+            AES = 00,
+        ],
+        /// KMOD
+        KMOD OFFSET(24) NUMBITS(2) [
+            NORMAL = 0b00,
+            WRAPPED = 0b01,
+            SHARED = 0b10,
+        ],
+        /// KEYPROT
+        KEYPROT OFFSET(19) NUMBITS(1) [
+            /// application can transfer the ownership of the SAES, with its
+            /// loaded key, to an application running in another security context
+            ALLOW_TRASNFER = 0,
+            /// generates key error flag if the application trying to access any register
+            /// has a different security context
+            RESTRICT_TRANSFER = 1,
+        ],
+        /// KEYSIZE
+        KEYSIZE OFFSET(18) NUMBITS(1) [
+            AES128 = 0,
+            AES256 = 1,
+        ],
+        /// DMAOUTEN
+        DMAOUTEN OFFSET(12) NUMBITS(1) [],
+        /// DMAINEN
+        DMAINEN OFFSET(11) NUMBITS(1) [],
+        /// CHMOD
+        CHMOD OFFSET(5) NUMBITS(2) [
+            ECB = 0b000,
+            CBC = 0b001,
+        ],
+        /// MODE
+        MODE OFFSET(3) NUMBITS(2) [
+            Encrypt = 0b00,
+            KeyDerivation = 0b01,
+            Decrypt = 0b10,
+        ],
+        /// DATATYPE
+        DATATYPE OFFSET(1) NUMBITS(2) [
+            None = 0b00,       // 32-bit (No swapping)
+            HalfWord = 0b01,   // 16-bit (Half-word swapping)
+            Byte = 0b10,       // 8-bit (Byte swapping)
+            Bit = 0b11         // 1-bit (Bit swapping)
+        ],
+        /// SAES enable
+        EN OFFSET(0) NUMBITS(1) []
     ],
-    /// KSHAREID
-    KSHAREID OFFSET(26) NUMBITS(2) [
-        AES = 00,
+    SR [
+        /// Key Valid flag
+        KEYVALID OFFSET(7) NUMBITS(1) [],
+        /// BUSY
+        BUSY OFFSET(3) NUMBITS(1) [],
+        /// Write error flag
+        WRERR OFFSET(2) NUMBITS(1) [],
+        /// Read error flag
+        RDERR OFFSET(1) NUMBITS(1) [],
+        /// Computation complete flag
+        CCF OFFSET(0) NUMBITS(1) []
     ],
-    /// KMOD
-    KMOD OFFSET(24) NUMBITS(2) [
-        NORMAL = 0b00,
-        WRAPPED = 0b01,
-        SHARED = 0b10,
+    DPACFGR [
+        /// CONFIGLOCK
+        CONFIGLOCK OFFSET(31) NUMBITS(1) [],
+        /// TRIMCFG
+        TRIMCFG OFFSET(3) NUMBITS(2) [],
+        /// RESEED
+        RESEED OFFSET(2) NUMBITS(1) [],
+        /// REDCFG
+        REDCFG OFFSET(1) NUMBITS(1) []
     ],
-    /// KEYPROT
-    KEYPROT OFFSET(19) NUMBITS(1) [
-        /// application can transfer the ownership of the SAES, with its
-        /// loaded key, to an application running in another security context
-        ALLOW_TRASNFER = 0,
-        /// generates key error flag if the application trying to access any register
-        /// has a different security context
-        RESTRICT_TRANSFER = 1,
+    IER [
+        /// RNGEIE
+        RNGEIE OFFSET(3) NUMBITS(1) [],
+        /// Key error interrupt enable
+        KEIE OFFSET(2) NUMBITS(1) [],
+        /// Read or write error interrupt enable
+        RWEIE OFFSET(1) NUMBITS(1) [],
+        /// Computation complete flag interrupt enable
+        CCFIE OFFSET(0) NUMBITS(1) []
     ],
-    /// KEYSIZE
-    KEYSIZE OFFSET(18) NUMBITS(1) [
-        AES128 = 0,
-        AES256 = 1,
+    ISR [
+        /// RNGEIF
+        RNGEIF OFFSET(3) NUMBITS(1) [],
+        /// Key error interrupt flag
+        KEIF OFFSET(2) NUMBITS(1) [],
+        /// Read or write error interrupt flag
+        RWEIF OFFSET(1) NUMBITS(1) [],
+        /// Computation complete flag
+        CCF OFFSET(0) NUMBITS(1) []
     ],
-    /// DMAOUTEN
-    DMAOUTEN OFFSET(12) NUMBITS(1) [],
-    /// DMAINEN
-    DMAINEN OFFSET(11) NUMBITS(1) [],
-    /// CHMOD
-    CHMOD OFFSET(5) NUMBITS(2) [
-        ECB = 0b000,
-        CBC = 0b001,
+    ICR [
+        /// RNGEIF
+        RNGEIF OFFSET(3) NUMBITS(1) [],
+        /// Key error interrupt flag clear
+        KEIF OFFSET(2) NUMBITS(1) [],
+        /// Read or write error interrupt flag clear
+        RWEIF OFFSET(1) NUMBITS(1) [],
+        /// Computation complete flag clear
+        CCF OFFSET(0) NUMBITS(1) []
     ],
-    /// MODE
-    MODE OFFSET(3) NUMBITS(2) [
-        Encrypt = 0b00,
-        KeyDerivation = 0b01,
-        Decrypt = 0b10,
-    ],
-    /// DATATYPE
-    DATATYPE OFFSET(1) NUMBITS(2) [
-        None = 0b00,       // 32-bit (No swapping)
-        HalfWord = 0b01,   // 16-bit (Half-word swapping)
-        Byte = 0b10,       // 8-bit (Byte swapping)
-        Bit = 0b11         // 1-bit (Bit swapping)
-    ],
-    /// SAES enable
-    EN OFFSET(0) NUMBITS(1) []
-],
-SR [
-    /// Key Valid flag
-    KEYVALID OFFSET(7) NUMBITS(1) [],
-    /// BUSY
-    BUSY OFFSET(3) NUMBITS(1) [],
-    /// Write error flag
-    WRERR OFFSET(2) NUMBITS(1) [],
-    /// Read error flag
-    RDERR OFFSET(1) NUMBITS(1) [],
-    /// Computation complete flag
-    CCF OFFSET(0) NUMBITS(1) []
-],
-DPACFGR [
-    /// CONFIGLOCK
-    CONFIGLOCK OFFSET(31) NUMBITS(1) [],
-    /// TRIMCFG
-    TRIMCFG OFFSET(3) NUMBITS(2) [],
-    /// RESEED
-    RESEED OFFSET(2) NUMBITS(1) [],
-    /// REDCFG
-    REDCFG OFFSET(1) NUMBITS(1) []
-],
-IER [
-    /// RNGEIE
-    RNGEIE OFFSET(3) NUMBITS(1) [],
-    /// Key error interrupt enable
-    KEIE OFFSET(2) NUMBITS(1) [],
-    /// Read or write error interrupt enable
-    RWEIE OFFSET(1) NUMBITS(1) [],
-    /// Computation complete flag interrupt enable
-    CCFIE OFFSET(0) NUMBITS(1) []
-],
-ISR [
-    /// RNGEIF
-    RNGEIF OFFSET(3) NUMBITS(1) [],
-    /// Key error interrupt flag
-    KEIF OFFSET(2) NUMBITS(1) [],
-    /// Read or write error interrupt flag
-    RWEIF OFFSET(1) NUMBITS(1) [],
-    /// Computation complete flag
-    CCF OFFSET(0) NUMBITS(1) []
-],
-ICR [
-    /// RNGEIF
-    RNGEIF OFFSET(3) NUMBITS(1) [],
-    /// Key error interrupt flag clear
-    KEIF OFFSET(2) NUMBITS(1) [],
-    /// Read or write error interrupt flag clear
-    RWEIF OFFSET(1) NUMBITS(1) [],
-    /// Computation complete flag clear
-    CCF OFFSET(0) NUMBITS(1) []
-],
-Data [
-    DATA OFFSET(0)   NUMBITS(32) []
-]
+    Data [
+        DATA OFFSET(0)   NUMBITS(32) []
+    ]
 ];
 pub const SAES_BASE: StaticRef<SaesRegisters> =
     unsafe { StaticRef::new(0x520C0C00 as *const SaesRegisters) };
@@ -170,6 +170,13 @@ pub const SAES_BASE: StaticRef<SaesRegisters> =
 enum SAESMode {
     ECB,
     CBC,
+}
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum KeyID {
+    DHUK,
+    BHK,
+    XOR,
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -192,7 +199,7 @@ enum State {
     Idle,
     KeyPreparation(DeferredOp),
     Crypt(CryptoContext),
-    KeyWrapping,
+    KeyWrapping(KeyID),
 }
 
 pub struct Saes<'a, K: AESKeySize> {
@@ -339,6 +346,43 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
         self.write_input(ctx);
     }
 
+    fn start_key_wrapping(
+        &self,
+        source: Option<&'static mut [u8]>,
+        dest: &'static mut [u8],
+        ctx: CryptoContext,
+        key_id: KeyID,
+    ) {
+        let regs = self.registers;
+
+        match K::LENGTH {
+            16 => {
+                regs.cr.modify(CR::KEYSIZE::AES128);
+            }
+            32 => {
+                regs.cr.modify(CR::KEYSIZE::AES256);
+            }
+            _ => {}
+        }
+
+        regs.cr.modify(CR::KMOD::WRAPPED);
+
+        match key_id {
+            KeyID::DHUK => regs.cr.modify(CR::KEYSEL::DHUK),
+            KeyID::BHK => regs.cr.modify(CR::KEYSEL::BHK),
+            KeyID::XOR => regs.cr.modify(CR::KEYSEL::XOR_DHUK_BHK),
+        }
+
+        regs.cr.modify(CR::EN::SET);
+
+        if let Some(src) = source {
+            self.input.replace(src);
+        }
+        self.output.replace(dest);
+        self.write_input(ctx);
+        self.state.set(State::Crypt(ctx));
+    }
+
     fn computation_complete(&self) {
         match self.state.get() {
             State::KeyPreparation(deferred_op) => {
@@ -380,11 +424,13 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
                             .map(move |client| client.crypt_done(self.input.take(), output));
                     });
                 } else {
+                    if !self.registers.cr.any_matching_bits_set(CR::EN::SET) {
+                        self.registers.cr.modify(CR::EN::SET);
+                    }
                     self.state.set(State::Crypt(ctx));
                     self.write_input(ctx);
                 }
             }
-            State::KeyWrapping => {}
             _ => {}
         }
     }
@@ -430,8 +476,25 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
     }
 
     fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
+        if self.registers.cr.any_matching_bits_set(CR::EN::SET)
+            || self.registers.sr.any_matching_bits_set(SR::BUSY::SET)
+        {
+            return Err(ErrorCode::BUSY);
+        }
         let key = match key {
             AESKey::PlainText(key) => key,
+            AESKey::Id(key_id) => {
+                // 0, 1 and 2 are valid key ids
+                match key_id {
+                    0 => self.state.set(State::KeyWrapping(KeyID::DHUK)),
+                    1 => self.state.set(State::KeyWrapping(KeyID::BHK)),
+                    2 => self.state.set(State::KeyWrapping(KeyID::XOR)),
+                    _ => {
+                        return Err(ErrorCode::INVAL);
+                    }
+                }
+                return Ok(());
+            }
             _ => return Err(ErrorCode::INVAL),
         };
 
@@ -445,11 +508,6 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
             self.registers.cr.modify(CR::KEYSIZE::AES256);
         }
 
-        if self.registers.cr.any_matching_bits_set(CR::EN::SET)
-            || self.registers.sr.any_matching_bits_set(SR::BUSY::SET)
-        {
-            return Err(ErrorCode::BUSY);
-        }
         self.registers.cr.modify(CR::KEYSEL::SOFTWARE);
         self.registers.cr.modify(CR::KEYPROT::ALLOW_TRASNFER);
         self.registers.cr.modify(CR::KMOD::NORMAL);
@@ -500,7 +558,12 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
         let state = self.state.get();
 
         //  Hardware busy check
-        if self.output.is_some() || !matches!(state, State::Idle | State::KeyPreparation(_)) {
+        if self.output.is_some()
+            || !matches!(
+                state,
+                State::Idle | State::KeyPreparation(_) | State::KeyWrapping(_)
+            )
+        {
             return Some((Err(ErrorCode::BUSY), source, dest));
         }
 
@@ -518,17 +581,25 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
             return Some((Err(ErrorCode::INVAL), source, dest));
         }
 
-        if let Some(src) = source {
-            self.input.replace(src);
-        }
-        self.output.replace(dest);
-
         let ctx = CryptoContext {
             start_index,
             stop_index,
             curr_index: 0,
             using_dma: false,
         };
+
+        // if we are in key wrapping mode, the input must be a key of size K::LENGTH
+        if let State::KeyWrapping(key_id) = state {
+            if stop_index - start_index != K::LENGTH {
+                return Some((Err(ErrorCode::INVAL), source, dest));
+            }
+            self.start_key_wrapping(source, dest, ctx, key_id);
+            return None;
+        }
+        if let Some(src) = source {
+            self.input.replace(src);
+        }
+        self.output.replace(dest);
 
         if let State::KeyPreparation(_) = state {
             self.state
@@ -559,36 +630,3 @@ impl<K: AESKeySize> kernel::hil::symmetric_encryption::AESCBC for Saes<'_, K> {
         Ok(())
     }
 }
-
-// fn wrap_key(&self, key: &'static mut [u8]) -> Result<(), ErrorCode> {
-//     let regs = self.registers;
-//     if regs.sr.any_matching_bits_set(SR::BUSY::SET)
-//         || regs.cr.any_matching_bits_set(CR::EN::SET)
-//     {
-//         return Err(ErrorCode::BUSY);
-//     }
-
-//     if self.state.get() != State::Idle {
-//         return Err(ErrorCode::BUSY);
-//     }
-
-//     match K::LENGTH {
-//         16 => {
-//             regs.cr.modify(CR::KEYSIZE::AES128);
-//         }
-//         32 => {
-//             regs.cr.modify(CR::KEYSIZE::AES256);
-//         }
-//         _ => return Err(ErrorCode::INVAL),
-//     }
-
-//     self.state.set(State::KeyWrapping);
-//     regs.cr
-//         .modify(CR::MODE::Encrypt + CR::KMOD::WRAPPED + CR::KEYSEL::DHUK + CR::MODE::Encrypt);
-
-//     regs.cr.modify(CR::EN::SET);
-
-//     self.write_padded_to_dinr(&key[0..AES128_KEY_SIZE]);
-
-//     Ok(())
-// }
