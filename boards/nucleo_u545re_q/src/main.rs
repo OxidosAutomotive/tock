@@ -17,6 +17,7 @@ use kernel::utilities::single_thread_value::SingleThreadValue;
 use kernel::{create_capability, static_init};
 
 use stm32u545::gpio::PinId;
+use stm32u545::hash::sha256::Sha256Adapter;
 use stm32u545::hash::Hash;
 
 pub mod io;
@@ -55,8 +56,10 @@ struct NucleoU545RE {
         >,
     >,
     // SHA256
-    hash:
-        &'static capsules_extra::test::sha256::TestSha256<'static, stm32u545::hash::Hash<'static>>,
+    hash: &'static capsules_extra::test::sha256::TestSha256<
+        'static,
+        stm32u545::hash::sha256::Sha256Adapter<'static>,
+    >,
     // MD5
     // hash: &'static capsules_extra::test::md5::TestMd5<'static, stm32u545::hash::Hash<'static>>,
     // HMAC-SHA256
@@ -183,6 +186,11 @@ unsafe fn start() -> (
     // Board specific wiring
     periphs.tim2.start();
     set_pin_primary_functions(periphs);
+
+    let sha256 = static_init!(
+        stm32u545::hash::sha256::Sha256Adapter<'static>,
+        stm32u545::hash::sha256::Sha256Adapter::new(hash)
+    );
 
     // Kernel and Muxes
     let processes = components::process_array::ProcessArrayComponent::new()
@@ -462,8 +470,8 @@ unsafe fn start() -> (
     // );
 
     let test_hash = static_init!(
-        TestSha256<'static, Hash<'static>>,
-        TestSha256::new(hash, hash_data_buffer, hash_digest_buffer, true)
+        TestSha256<'static, Sha256Adapter<'static>>,
+        TestSha256::new(sha256, hash_data_buffer, hash_digest_buffer, true)
     );
 
     // MD5
