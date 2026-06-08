@@ -8,7 +8,7 @@ use core::ops::Index;
 
 use crate::dma::{ChannelId, Dma};
 use crate::hash::traits::{HashAdaptee, HashAdapter};
-use crate::hash::utils::*;
+use crate::hash::utils::{DataWidth, HashClient, HmacKey, Leftover, Mode, State};
 
 use cortexm33::dma_fence::CortexMDmaFence;
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
@@ -152,7 +152,7 @@ pub const HASH_BASE: StaticRef<HashRegisters> =
     unsafe { StaticRef::new(0x420C0400 as *const HashRegisters) };
 
 // SHA2-256 has the largest digest.
-const MAX_DIGEST_LEN: usize = 32;
+// const MAX_DIGEST_LEN: usize = 32;
 const LONG_HMAC_KEY_LEN: usize = 64;
 // It is an artificial limitation for compatibility with capsules.
 // Taken from boards::components::hmac
@@ -480,7 +480,7 @@ impl Hash<'_> {
                         // pad digest if needed
                         // TODO: make it better in the sense we don't need to store client with
                         // specific length
-                        digest[(mode.get_digest_len() * 4)..MAX_DIGEST_LEN].fill(0);
+                        // digest[(mode.get_digest_len() * 4)..MAX_DIGEST_LEN].fill(0);
 
                         regs.cr.modify(CR::INIT::SET);
                         // release the peripheral
@@ -666,7 +666,6 @@ impl crate::dma::DmaClient for Hash<'_> {
         if let Some(ch) = self.dma_channel.get() {
             if ch == channel {
                 self.handle_dma_interrupt();
-                return;
             }
         }
     }
@@ -909,6 +908,7 @@ impl<'a> HashAdaptee<'a> for Hash<'a> {
                 + CR::DATATYPE::_8bitData
                 + CR::INIT::SET,
         );
+        debug!("hash: i've set the mode");
         Ok(())
     }
 

@@ -1,3 +1,7 @@
+// Licensed under the Apache License, Version 2.0 or the MIT License.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright OxidOS Automotive 2026.
+
 use core::cell::Cell;
 
 use kernel::hil::digest;
@@ -56,7 +60,7 @@ pub enum HashClient<'a, const DIGEST_LEN: usize> {
     Full(&'a dyn digest::Client<DIGEST_LEN>),
 }
 
-impl<'a, const DIGEST_LEN: usize> HashClient<'a, DIGEST_LEN> {
+impl<const DIGEST_LEN: usize> HashClient<'_, DIGEST_LEN> {
     pub fn add_data_done(&self, result: Result<(), ErrorCode>, data: SubSlice<'static, u8>) {
         match self {
             Self::Single(client_data, _, _) => {
@@ -65,7 +69,7 @@ impl<'a, const DIGEST_LEN: usize> HashClient<'a, DIGEST_LEN> {
             Self::DoubleHash(client) => client.add_data_done(result, data),
             Self::DoubleVerify(client) => client.add_data_done(result, data),
             Self::Full(client) => client.add_data_done(result, data),
-        };
+        }
     }
 
     pub fn add_mut_data_done(&self, result: Result<(), ErrorCode>, data: SubSliceMut<'static, u8>) {
@@ -76,7 +80,7 @@ impl<'a, const DIGEST_LEN: usize> HashClient<'a, DIGEST_LEN> {
             Self::DoubleHash(client) => client.add_mut_data_done(result, data),
             Self::DoubleVerify(client) => client.add_mut_data_done(result, data),
             Self::Full(client) => client.add_mut_data_done(result, data),
-        };
+        }
     }
 
     pub fn hash_done(&self, result: Result<(), ErrorCode>, digest: &'static mut [u8; DIGEST_LEN]) {
@@ -87,7 +91,7 @@ impl<'a, const DIGEST_LEN: usize> HashClient<'a, DIGEST_LEN> {
             Self::DoubleHash(client) => client.hash_done(result, digest),
             Self::Full(client) => client.hash_done(result, digest),
             _ => (),
-        };
+        }
     }
 
     pub fn verification_done(
@@ -102,7 +106,7 @@ impl<'a, const DIGEST_LEN: usize> HashClient<'a, DIGEST_LEN> {
             Self::DoubleVerify(client) => client.verification_done(result, compare),
             Self::Full(client) => client.verification_done(result, compare),
             _ => (),
-        };
+        }
     }
 }
 
@@ -142,7 +146,7 @@ impl Leftover {
     }
 
     pub fn to_le(&self) -> u32 {
-        let res = match self.buffer.take() {
+        match self.buffer.take() {
             Some(b) => {
                 let value = b >> (8 * self.bytes_left());
                 self.index.update(|idx| idx.saturating_sub(4));
@@ -152,9 +156,7 @@ impl Leftover {
                 value
             }
             None => 0,
-        };
-
-        res
+        }
     }
 
     pub fn bytes_left(&self) -> usize {
