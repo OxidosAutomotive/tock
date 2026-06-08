@@ -170,9 +170,6 @@ pub struct Hash<'a> {
     leftover: Leftover,
     verify: Cell<bool>,
     cancelled: Cell<bool>,
-    // How to be more flexible in this field?
-    // THIS IS CRITICAL
-    // client: OptionalCell<&'a dyn Client<MAX_DIGEST_LEN>>,
     adapter: OptionalCell<&'a dyn HashAdapter<'a, Self>>,
     digest: OptionalCell<&'static mut [u8]>,
     deferred_call: DeferredCall,
