@@ -106,7 +106,7 @@ impl Rcc {
     }
 
     pub fn enable_saes(&self) {
-        self.registers.ahb2enr1.modify(AHB2ENR1::AESEN::SET);
+        self.registers.ahb2enr1.modify(AHB2ENR1::SAESEN::SET);
     }
 
     pub fn enable_syscfg(&self) {

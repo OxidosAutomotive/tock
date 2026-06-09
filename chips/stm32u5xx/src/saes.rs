@@ -1,5 +1,6 @@
 use core::cell::Cell;
 use core::marker::PhantomData;
+use kernel::debug;
 use kernel::errorcode::ErrorCode;
 use kernel::hil::symmetric_encryption::{
     AESKey, AESKeySize, AES, AES128_KEY_SIZE, AES_BLOCK_SIZE, AES_IV_SIZE,
@@ -179,6 +180,26 @@ enum KeyID {
     XOR,
 }
 
+impl KeyID {
+    fn to_bits(&self) -> registers::FieldValue<u32, CR::Register> {
+        match self {
+            KeyID::DHUK => CR::KEYSEL::DHUK,
+            KeyID::BHK => CR::KEYSEL::BHK,
+            KeyID::XOR => CR::KEYSEL::XOR_DHUK_BHK,
+        }
+    }
+}
+
+impl From<usize> for KeyID {
+    fn from(value: usize) -> Self {
+        match value {
+            0 => KeyID::DHUK,
+            1 => KeyID::BHK,
+            2.. => KeyID::XOR,
+        }
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Debug)]
 enum DeferredOp {
     None,
@@ -197,9 +218,9 @@ struct CryptoContext {
 #[derive(Copy, Clone, PartialEq, Debug)]
 enum State {
     Idle,
-    KeyPreparation(DeferredOp),
+    KeyPrep(DeferredOp),
     Crypt(CryptoContext),
-    KeyWrapping(KeyID),
+    KeyWrap(KeyID),
 }
 
 pub struct Saes<'a, K: AESKeySize> {
@@ -282,7 +303,7 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
 
     /// Function for ECB and CBC decryption modes which goes though Key derivation operation
     fn prepare_decryption_key(&self, key: &[u8]) {
-        self.state.set(State::KeyPreparation(DeferredOp::None));
+        self.state.set(State::KeyPrep(DeferredOp::None));
         self.registers.cr.modify(CR::EN::CLEAR);
         self.registers.cr.modify(CR::MODE::KeyDerivation);
 
@@ -346,13 +367,7 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
         self.write_input(ctx);
     }
 
-    fn start_key_wrapping(
-        &self,
-        source: Option<&'static mut [u8]>,
-        dest: &'static mut [u8],
-        ctx: CryptoContext,
-        key_id: KeyID,
-    ) {
+    fn start_key_wrapping(&self, ctx: CryptoContext, key_id: KeyID) {
         let regs = self.registers;
 
         match K::LENGTH {
@@ -366,26 +381,16 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
         }
 
         regs.cr.modify(CR::KMOD::WRAPPED);
-
-        match key_id {
-            KeyID::DHUK => regs.cr.modify(CR::KEYSEL::DHUK),
-            KeyID::BHK => regs.cr.modify(CR::KEYSEL::BHK),
-            KeyID::XOR => regs.cr.modify(CR::KEYSEL::XOR_DHUK_BHK),
-        }
-
+        regs.cr.modify(key_id.to_bits());
         regs.cr.modify(CR::EN::SET);
 
-        if let Some(src) = source {
-            self.input.replace(src);
-        }
-        self.output.replace(dest);
         self.write_input(ctx);
         self.state.set(State::Crypt(ctx));
     }
 
     fn computation_complete(&self) {
         match self.state.get() {
-            State::KeyPreparation(deferred_op) => {
+            State::KeyPrep(deferred_op) => {
                 self.registers.cr.modify(CR::EN::CLEAR);
                 self.registers.cr.modify(CR::MODE::Decrypt);
                 match deferred_op {
@@ -437,19 +442,23 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
 
     pub fn handle_interrupt(&self) {
         if self.registers.isr.is_set(ISR::CCF) {
+            debug!("CCF");
             self.registers.icr.write(ICR::CCF::SET);
             self.computation_complete();
         }
 
         if self.registers.isr.is_set(ISR::RWEIF) {
+            debug!("RWEIF");
             self.registers.icr.write(ICR::RWEIF::SET);
         }
 
         if self.registers.isr.is_set(ISR::KEIF) {
+            debug!("KEIF");
             self.registers.icr.write(ICR::KEIF::SET);
         }
 
         if self.registers.isr.is_set(ISR::RNGEIF) {
+            debug!("RNGEIF");
             self.registers.icr.write(ICR::RNGEIF::SET);
         }
     }
@@ -462,6 +471,8 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
         self.registers.cr.modify(CR::DATATYPE::Byte);
         self.state.set(State::Idle);
         self.enable_interrupts();
+        debug!("CR: {:02x?}", self.registers.cr.get());
+        debug!("SR: {:02x?}", self.registers.sr.get());
     }
 
     fn disable(&self) {
@@ -484,14 +495,13 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
         let key = match key {
             AESKey::PlainText(key) => key,
             AESKey::Id(key_id) => {
-                // 0, 1 and 2 are valid key ids
-                match key_id {
-                    0 => self.state.set(State::KeyWrapping(KeyID::DHUK)),
-                    1 => self.state.set(State::KeyWrapping(KeyID::BHK)),
-                    2 => self.state.set(State::KeyWrapping(KeyID::XOR)),
-                    _ => {
-                        return Err(ErrorCode::INVAL);
-                    }
+                // 0, 1 and 2 are valid key ids. Also, to unwrap a key, AESKey::Wrapped should be used
+                if key_id > 2 || !self.encrypting.get() {
+                    return Err(ErrorCode::INVAL);
+                }
+                let id = KeyID::from(key_id);
+                if self.encrypting.get() {
+                    self.state.set(State::KeyWrap(id));
                 }
                 return Ok(());
             }
@@ -512,7 +522,7 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
         self.registers.cr.modify(CR::KEYPROT::ALLOW_TRASNFER);
         self.registers.cr.modify(CR::KMOD::NORMAL);
 
-        if self.encrypting.get() {
+        if !self.encrypting.get() {
             self.prepare_decryption_key(key);
         } else {
             self.write_key_registers(key);
@@ -532,9 +542,9 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
 
         match self.state.get() {
             State::Idle => self.write_iv_registers(iv.try_into().unwrap()),
-            State::KeyPreparation(_) => {
+            State::KeyPrep(_) => {
                 self.iv.set(iv.try_into().unwrap());
-                self.state.set(State::KeyPreparation(DeferredOp::WriteIvx));
+                self.state.set(State::KeyPrep(DeferredOp::WriteIvx));
             }
             _ => return Err(ErrorCode::BUSY),
         }
@@ -558,12 +568,7 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
         let state = self.state.get();
 
         //  Hardware busy check
-        if self.output.is_some()
-            || !matches!(
-                state,
-                State::Idle | State::KeyPreparation(_) | State::KeyWrapping(_)
-            )
-        {
+        if self.output.is_some() {
             return Some((Err(ErrorCode::BUSY), source, dest));
         }
 
@@ -581,6 +586,11 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
             return Some((Err(ErrorCode::INVAL), source, dest));
         }
 
+        // if we are in key wrapping mode, the input must be a key of size K::LENGTH
+        if matches!(state, State::KeyWrap(_)) && stop_index - start_index != K::LENGTH {
+            return Some((Err(ErrorCode::INVAL), source, dest));
+        }
+
         let ctx = CryptoContext {
             start_index,
             stop_index,
@@ -588,27 +598,16 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
             using_dma: false,
         };
 
-        // if we are in key wrapping mode, the input must be a key of size K::LENGTH
-        if let State::KeyWrapping(key_id) = state {
-            if stop_index - start_index != K::LENGTH {
-                return Some((Err(ErrorCode::INVAL), source, dest));
-            }
-            self.start_key_wrapping(source, dest, ctx, key_id);
-            return None;
-        }
         if let Some(src) = source {
             self.input.replace(src);
         }
         self.output.replace(dest);
 
-        if let State::KeyPreparation(_) = state {
-            self.state
-                .set(State::KeyPreparation(DeferredOp::Crypt(ctx)));
-            return None;
+        match state {
+            State::KeyWrap(key_id) => self.start_key_wrapping(ctx, key_id),
+            State::KeyPrep(_) => self.state.set(State::KeyPrep(DeferredOp::Crypt(ctx))),
+            _ => self.start_crypt(ctx),
         }
-
-        self.start_crypt(ctx);
-
         None
     }
 }
