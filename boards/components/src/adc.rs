@@ -6,6 +6,7 @@
 
 use capsules_core::adc::AdcDedicated;
 use capsules_core::adc::AdcVirtualized;
+use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
 use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_adc::{AdcDevice, MuxAdc};
 use core::marker::PhantomData;
@@ -87,7 +88,7 @@ impl<A: 'static + adc::Adc<'static>, P: SelectionPolicy<&'static AdcDevice<'stat
     type Output = &'static MuxAdc<'static, A, P>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
-        let adc_mux = static_buffer.write(MuxAdc::new(self.adc));
+        let adc_mux = static_buffer.write(MuxAdc::new_with_policy(self.adc));
 
         self.adc.set_client(adc_mux);
 
