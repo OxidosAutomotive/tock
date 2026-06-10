@@ -45,7 +45,8 @@ register_bitfields![u32,
         GPIOGEN OFFSET(6) NUMBITS(1) [],
         GPIOHEN OFFSET(7) NUMBITS(1) [],
         GPIOIEN OFFSET(8) NUMBITS(1) [],
-        GPIOJEN OFFSET(9) NUMBITS(1) []
+        GPIOJEN OFFSET(9) NUMBITS(1) [],
+        TRNGEN  OFFSET(18) NUMBITS(1) []
     ],
     pub APB1ENR1 [
         TIM2EN OFFSET(0) NUMBITS(1) []
@@ -101,6 +102,10 @@ impl Rcc {
 
     pub fn enable_syscfg(&self) {
         self.registers.apb3enr.modify(APB3ENR::SYSCFGEN::SET);
+    }
+
+    pub fn enable_trng(&self) {
+        self.registers.ahb2enr1.modify(AHB2ENR1::TRNGEN::SET);
     }
 
     pub fn set_usart1_source_pclk(&self) {
