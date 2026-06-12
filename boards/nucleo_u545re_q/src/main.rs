@@ -169,6 +169,7 @@ unsafe fn start() -> (
     let periphs = static_init!(
         stm32u545::chip::Stm32u5xxDefaultPeripherals<'static>,
         stm32u545::chip::Stm32u5xxDefaultPeripherals::new(usart1, exti, dma1, aes, saes)
+        stm32u545::chip::Stm32u5xxDefaultPeripherals::new(usart1, exti, dma1, trng)
     );
 
     // Initialize wiring (DMA, clocks)

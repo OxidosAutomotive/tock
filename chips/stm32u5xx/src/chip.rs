@@ -18,6 +18,10 @@ use crate::{gpio, saes};
 
 use core::fmt::Write;
 use kernel::hil::symmetric_encryption::AES256;
+use crate::{entropy, exti};
+
+use core::fmt::Write;
+use kernel::deferred_call::DeferredCallClient;
 use kernel::platform::chip::Chip;
 use kernel::platform::chip::InterruptService;
 
@@ -37,6 +41,7 @@ pub struct Stm32u5xxDefaultPeripherals<'a> {
     pub gpio_c: gpio::Port<'a>,
     pub aes: &'a aes::Aes<'a, AES256>,
     pub saes: &'a saes::Saes<'a, AES256>,
+    pub trng: &'a entropy::Trng<'a>,
 }
 
 fn enable_tim2_clock() {
@@ -51,6 +56,7 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
         dma1: &'a Dma,
         aes: &'a aes::Aes<'a, AES256>,
         saes: &'a saes::Saes<'a, AES256>,
+        trng: &'a Trng<'a>,
     ) -> Self {
         Self {
             rcc: rcc::Rcc::new(rcc::RCC_BASE),
@@ -62,6 +68,7 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
             gpio_c: gpio::Port::new(gpio::GPIO_C_BASE, exti, gpio::GpioPort::PortC),
             aes,
             saes,
+            trng,
         }
     }
 
@@ -74,6 +81,7 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
         self.rcc.enable_aes();
         self.rcc.enable_saes();
         self.rcc.enable_syscfg();
+        self.rcc.enable_trng();
         self.rcc.set_usart1_source_pclk();
         // Link DMA to USART1
         let usart1_channel_tx = self.dma1.request_channel();
@@ -90,6 +98,10 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
         if let (Some(in_channel), Some(out_channel)) = (aes_in_channel, aes_out_channel) {
             aes::Aes::set_dma(self.aes, self.dma1, in_channel, out_channel);
         }
+        if let (Some(tx), Some(rx)) = (usart1_channel_tx, usart1_channel_rx) {
+            usart::Usart::set_dma(self.usart1, self.dma1, tx, rx);
+        }
+        self.trng.init();
     }
 }
 

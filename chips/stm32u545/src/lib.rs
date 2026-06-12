@@ -4,7 +4,7 @@
 
 #![no_std]
 
-pub use stm32u5xx::{aes, chip, dma, exti, gpio, rcc, saes, tim, usart};
+pub use stm32u5xx::{aes, chip, dma, entropy, exti, gpio, rcc, saes, tim, usart};
 
 use cortexm33::{CortexM33, CortexMVariant};
 
