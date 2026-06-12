@@ -164,12 +164,15 @@ unsafe fn start() -> (
         stm32u545::saes::Saes<'static, AES256>,
         stm32u545::saes::Saes::new(stm32u545::saes::SAES_BASE)
     );
+    let trng = static_init!(
+        stm32u545::entropy::Trng<'static>,
+        stm32u545::entropy::Trng::new(stm32u545::entropy::RNG_BASE)
+    );
 
     // Load Peripherals Bundle
     let periphs = static_init!(
         stm32u545::chip::Stm32u5xxDefaultPeripherals<'static>,
-        stm32u545::chip::Stm32u5xxDefaultPeripherals::new(usart1, exti, dma1, aes, saes)
-        stm32u545::chip::Stm32u5xxDefaultPeripherals::new(usart1, exti, dma1, trng)
+        stm32u545::chip::Stm32u5xxDefaultPeripherals::new(usart1, exti, dma1, aes, saes, trng)
     );
 
     // Initialize wiring (DMA, clocks)

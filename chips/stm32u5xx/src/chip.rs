@@ -4,6 +4,7 @@
 // Copyright OxidOS Automotive 2026.
 
 use crate::dma::{ChannelId, Dma};
+use crate::entropy::Trng;
 use crate::nvic::{
     AES_IRQ, EXTI13_IRQ, GPDMA1_CH0_IRQ, GPDMA1_CH10_IRQ, GPDMA1_CH11_IRQ, GPDMA1_CH12_IRQ,
     GPDMA1_CH13_IRQ, GPDMA1_CH14_IRQ, GPDMA1_CH15_IRQ, GPDMA1_CH1_IRQ, GPDMA1_CH2_IRQ,
@@ -14,14 +15,11 @@ use crate::rcc;
 use crate::tim;
 use crate::usart;
 use crate::{aes, exti};
-use crate::{gpio, saes};
+use crate::{entropy, gpio, saes};
 
 use core::fmt::Write;
 use kernel::hil::symmetric_encryption::AES256;
-use crate::{entropy, exti};
 
-use core::fmt::Write;
-use kernel::deferred_call::DeferredCallClient;
 use kernel::platform::chip::Chip;
 use kernel::platform::chip::InterruptService;
 
