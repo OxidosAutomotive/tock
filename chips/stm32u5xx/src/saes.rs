@@ -327,7 +327,7 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
         buf[..slice.len()].copy_from_slice(slice);
 
         for chunk in buf.chunks_exact(4) {
-            let word = u32::from_le_bytes(chunk.try_into().unwrap());
+            let word = u32::from_be_bytes(chunk.try_into().unwrap());
             self.registers.dinr.set(word);
         }
     }
@@ -365,6 +365,9 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
             self.registers.cr.modify(CR::EN::SET);
         }
         self.write_input(ctx);
+        debug!("wrote input");
+        debug!("CR: {:02x?}", self.registers.cr.get());
+        debug!("SR: {:02x?}", self.registers.sr.get());
     }
 
     fn start_key_wrapping(&self, ctx: CryptoContext, key_id: KeyID) {
@@ -441,6 +444,9 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
     }
 
     pub fn handle_interrupt(&self) {
+        debug!("INTERRUPT");
+        debug!("CR: {:02x?}", self.registers.cr.get());
+        debug!("SR: {:02x?}", self.registers.sr.get());
         if self.registers.isr.is_set(ISR::CCF) {
             debug!("CCF");
             self.registers.icr.write(ICR::CCF::SET);
@@ -471,6 +477,7 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
         self.registers.cr.modify(CR::DATATYPE::Byte);
         self.state.set(State::Idle);
         self.enable_interrupts();
+        debug!("ENABLE");
         debug!("CR: {:02x?}", self.registers.cr.get());
         debug!("SR: {:02x?}", self.registers.sr.get());
     }
@@ -487,6 +494,9 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
     }
 
     fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
+        debug!("KEY");
+        debug!("CR: {:02x?}", self.registers.cr.get());
+        debug!("SR: {:02x?}", self.registers.sr.get());
         if self.registers.cr.any_matching_bits_set(CR::EN::SET)
             || self.registers.sr.any_matching_bits_set(SR::BUSY::SET)
         {
@@ -532,6 +542,9 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
     }
 
     fn set_iv(&self, iv: &[u8]) -> Result<(), ErrorCode> {
+        debug!("IV");
+        debug!("CR: {:02x?}", self.registers.cr.get());
+        debug!("SR: {:02x?}", self.registers.sr.get());
         if iv.len() != AES_IV_SIZE {
             return Err(ErrorCode::INVAL);
         }
@@ -565,6 +578,9 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
         Option<&'static mut [u8]>,
         &'static mut [u8],
     )> {
+        debug!("CRYPT");
+        debug!("CR: {:02x?}", self.registers.cr.get());
+        debug!("SR: {:02x?}", self.registers.sr.get());
         let state = self.state.get();
 
         //  Hardware busy check

@@ -207,6 +207,7 @@ impl<'a, A: AES<'a, AES256> + AESCBC> TestAES256Cbc<'a, A> {
 
         let (start, stop) = chunk_range(step);
         run_crypt(self.aes, in_place, &self.source, &self.data, start, stop);
+        debug!("ran");
     }
 }
 

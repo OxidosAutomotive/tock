@@ -138,7 +138,9 @@ impl<'a> Trng<'a> {
             .nscr
             .modify(NSCR::NSCFG.val(NOISE_SOURCE_CONTROL_CONFIG));
         self.registers.cr.modify(CR::CONFIGLOCK::SET);
-        self.registers.cr.modify(CR::CONDRST::CLEAR);
+        self.registers
+            .cr
+            .modify(CR::CONDRST::CLEAR + CR::RNGEN::SET);
         self.register();
     }
 
@@ -148,9 +150,7 @@ impl<'a> Trng<'a> {
             .client
             .map(|client| client.entropy_available(&mut TrngIter(self), Ok(())));
         match response {
-            Some(Continue::Done) | None => {
-                self.registers.cr.modify(CR::RNGEN::CLEAR);
-            }
+            Some(Continue::Done) | None => {}
             _ => {
                 self.entropy_needed.set(true);
                 self.deferred_call.set();
@@ -162,7 +162,6 @@ impl<'a> Trng<'a> {
 impl<'a> Entropy32<'a> for Trng<'a> {
     fn get(&self) -> Result<(), kernel::ErrorCode> {
         let regs = self.registers;
-        regs.cr.modify(CR::RNGEN::SET);
         if regs.sr.any_matching_bits_set(SR::CECS::SET + SR::SECS::SET) {
             return Err(kernel::ErrorCode::FAIL);
         }
