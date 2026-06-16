@@ -54,6 +54,7 @@ pub struct TestAES256Ecb<'a, A: 'a> {
     source: TakeCell<'static, [u8]>,
     data: TakeCell<'static, [u8]>,
     test_decrypt: bool,
+    test_keywrap: Option<usize>,
     step: Cell<TestStep>,
     client: OptionalCell<&'static dyn CapsuleTestClient>,
 }
@@ -65,6 +66,7 @@ impl<'a, A: AES<'a, AES256> + AESECB> TestAES256Ecb<'a, A> {
         source: &'static mut [u8],
         data: &'static mut [u8],
         test_decrypt: bool,
+        test_keywrap: Option<usize>,
     ) -> Self {
         TestAES256Ecb {
             aes,
@@ -72,6 +74,7 @@ impl<'a, A: AES<'a, AES256> + AESECB> TestAES256Ecb<'a, A> {
             source: TakeCell::new(source),
             data: TakeCell::new(data),
             test_decrypt,
+            test_keywrap,
             step: Cell::new(TestStep::StandardEnc),
             client: OptionalCell::empty(),
         }
@@ -207,7 +210,6 @@ impl<'a, A: AES<'a, AES256> + AESCBC> TestAES256Cbc<'a, A> {
 
         let (start, stop) = chunk_range(step);
         run_crypt(self.aes, in_place, &self.source, &self.data, start, stop);
-        debug!("ran");
     }
 }
 

@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 use kernel::debug;
 use kernel::errorcode::ErrorCode;
 use kernel::hil::symmetric_encryption::{
-    AESKey, AESKeySize, AES, AES128_KEY_SIZE, AES_BLOCK_SIZE, AES_IV_SIZE,
+    AESKey, AESKeySize, AES, AES128_KEY_SIZE, AES256_KEY_SIZE, AES_BLOCK_SIZE, AES_IV_SIZE,
 };
 use kernel::utilities::cells::{OptionalCell, TakeCell};
 use kernel::utilities::registers::interfaces::{ReadWriteable, Readable, Writeable};
@@ -12,6 +12,8 @@ use kernel::utilities::registers::{
 };
 
 use kernel::utilities::StaticRef;
+
+use crate::entropy::Trng;
 
 register_structs! {
     /// Secure AES coprocessor
@@ -236,7 +238,7 @@ pub struct Saes<'a, K: AESKeySize> {
 }
 
 impl<'a, K: AESKeySize> Saes<'a, K> {
-    pub fn new(base: StaticRef<SaesRegisters>) -> Saes<'a, K> {
+    pub fn new(base: StaticRef<SaesRegisters>, _trng: &'static Trng) -> Saes<'a, K> {
         Saes {
             registers: base,
             mode: Cell::new(SAESMode::ECB),
@@ -269,23 +271,23 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
     /// Helper to write a 128-bit or 256-bit key into the hardware key registers
     fn write_key_registers(&self, key: &[u8]) {
         // Default to using the first 16 bytes for the lower registers (AES-128 behavior)
-        let mut lower_key_chunk = &key[0..16];
+        let mut lower_key_chunk = &key[0..AES128_KEY_SIZE];
 
-        if K::LENGTH == 32 {
+        if K::LENGTH == AES256_KEY_SIZE {
             // AES-256: Write KEYR7 down to KEYR4 first
             for (reg, chunk) in self
                 .registers
                 .keyr2
                 .iter()
                 .rev()
-                .zip(key[0..16].chunks_exact(4))
+                .zip(key[0..AES128_KEY_SIZE].chunks_exact(4))
             {
                 let word = u32::from_be_bytes(chunk.try_into().unwrap());
                 reg.write(Data::DATA.val(word));
             }
 
             // Update the slice so the lower registers get the second half of the 256-bit key
-            lower_key_chunk = &key[16..32];
+            lower_key_chunk = &key[AES128_KEY_SIZE..AES256_KEY_SIZE];
         }
 
         // Write KEYR3 down to KEYR0
@@ -354,7 +356,7 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
         let mut block = [0u8; AES_BLOCK_SIZE];
         for chunk in block.chunks_exact_mut(4) {
             let word = self.registers.doutr.get();
-            chunk.copy_from_slice(&word.to_le_bytes());
+            chunk.copy_from_slice(&word.to_be_bytes());
         }
         block
     }
@@ -365,19 +367,16 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
             self.registers.cr.modify(CR::EN::SET);
         }
         self.write_input(ctx);
-        debug!("wrote input");
-        debug!("CR: {:02x?}", self.registers.cr.get());
-        debug!("SR: {:02x?}", self.registers.sr.get());
     }
 
     fn start_key_wrapping(&self, ctx: CryptoContext, key_id: KeyID) {
         let regs = self.registers;
 
         match K::LENGTH {
-            16 => {
+            AES128_KEY_SIZE => {
                 regs.cr.modify(CR::KEYSIZE::AES128);
             }
-            32 => {
+            AES256_KEY_SIZE => {
                 regs.cr.modify(CR::KEYSIZE::AES256);
             }
             _ => {}
@@ -444,11 +443,7 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
     }
 
     pub fn handle_interrupt(&self) {
-        debug!("INTERRUPT");
-        debug!("CR: {:02x?}", self.registers.cr.get());
-        debug!("SR: {:02x?}", self.registers.sr.get());
         if self.registers.isr.is_set(ISR::CCF) {
-            debug!("CCF");
             self.registers.icr.write(ICR::CCF::SET);
             self.computation_complete();
         }
@@ -474,12 +469,9 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
     fn enable(&self) {
         self.registers.cr.modify(CR::IPRST::SET);
         self.registers.cr.write(CR::EN::CLEAR);
-        self.registers.cr.modify(CR::DATATYPE::Byte);
+        self.registers.cr.modify(CR::DATATYPE::None);
         self.state.set(State::Idle);
         self.enable_interrupts();
-        debug!("ENABLE");
-        debug!("CR: {:02x?}", self.registers.cr.get());
-        debug!("SR: {:02x?}", self.registers.sr.get());
     }
 
     fn disable(&self) {
@@ -494,9 +486,6 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
     }
 
     fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
-        debug!("KEY");
-        debug!("CR: {:02x?}", self.registers.cr.get());
-        debug!("SR: {:02x?}", self.registers.sr.get());
         if self.registers.cr.any_matching_bits_set(CR::EN::SET)
             || self.registers.sr.any_matching_bits_set(SR::BUSY::SET)
         {
@@ -522,7 +511,7 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
             return Err(ErrorCode::INVAL);
         }
 
-        if K::LENGTH == 16 {
+        if K::LENGTH == AES128_KEY_SIZE {
             self.registers.cr.modify(CR::KEYSIZE::AES128);
         } else {
             self.registers.cr.modify(CR::KEYSIZE::AES256);
@@ -542,14 +531,13 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
     }
 
     fn set_iv(&self, iv: &[u8]) -> Result<(), ErrorCode> {
-        debug!("IV");
-        debug!("CR: {:02x?}", self.registers.cr.get());
-        debug!("SR: {:02x?}", self.registers.sr.get());
         if iv.len() != AES_IV_SIZE {
             return Err(ErrorCode::INVAL);
         }
 
-        if self.registers.cr.any_matching_bits_set(CR::EN::SET) {
+        if self.registers.cr.any_matching_bits_set(CR::EN::SET)
+            || self.registers.sr.any_matching_bits_set(SR::BUSY::SET)
+        {
             return Err(ErrorCode::BUSY);
         }
 
@@ -578,13 +566,10 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
         Option<&'static mut [u8]>,
         &'static mut [u8],
     )> {
-        debug!("CRYPT");
-        debug!("CR: {:02x?}", self.registers.cr.get());
-        debug!("SR: {:02x?}", self.registers.sr.get());
         let state = self.state.get();
 
         //  Hardware busy check
-        if self.output.is_some() {
+        if self.output.is_some() || self.registers.sr.any_matching_bits_set(SR::BUSY::SET) {
             return Some((Err(ErrorCode::BUSY), source, dest));
         }
 

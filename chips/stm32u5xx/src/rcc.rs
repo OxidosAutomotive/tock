@@ -10,7 +10,7 @@ use kernel::utilities::StaticRef;
 register_structs! {
     pub RccRegisters {
         /// Control register
-        (0x000 => cr: ReadWrite<u32>),
+        (0x000 => cr: ReadWrite<u32, CR::Register>),
         (0x004 => _reserved0: [u32; 33]),
         /// AHB1 peripheral clock enable register
         (0x088 => ahb1enr: ReadWrite<u32, AHB1ENR::Register>),
@@ -27,11 +27,16 @@ register_structs! {
         (0x0AC => _reserved3: [u32; 13]),
         /// Peripherals independent clock configuration register 1
         (0x0E0 => ccipr1: ReadWrite<u32, CCIPR1::Register>),
+        /// Peripherals independent clock configuration register 2
         (0x0E4 => @END),
     }
 }
 
 register_bitfields![u32,
+    pub CR[
+        SHSION  OFFSET(14) NUMBITS(1)[],
+        SHSIRDY OFFSET(15) NUMBITS(1)[],
+    ],
     pub AHB1ENR [
         GPDMA1EN OFFSET(0) NUMBITS(1) []
     ],
@@ -107,6 +112,7 @@ impl Rcc {
     }
 
     pub fn enable_saes(&self) {
+        self.registers.cr.modify(CR::SHSION::SET);
         self.registers.ahb2enr1.modify(AHB2ENR1::SAESEN::SET);
     }
 

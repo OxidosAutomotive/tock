@@ -160,13 +160,13 @@ unsafe fn start() -> (
         stm32u545::aes::Aes<'static, AES256>,
         stm32u545::aes::Aes::new(stm32u545::aes::AES_BASE)
     );
-    let saes = static_init!(
-        stm32u545::saes::Saes<'static, AES256>,
-        stm32u545::saes::Saes::new(stm32u545::saes::SAES_BASE)
-    );
     let trng = static_init!(
         stm32u545::entropy::Trng<'static>,
         stm32u545::entropy::Trng::new(stm32u545::entropy::RNG_BASE)
+    );
+    let saes = static_init!(
+        stm32u545::saes::Saes<'static, AES256>,
+        stm32u545::saes::Saes::new(stm32u545::saes::SAES_BASE, trng)
     );
 
     // Load Peripherals Bundle

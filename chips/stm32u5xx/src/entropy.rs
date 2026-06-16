@@ -157,6 +157,10 @@ impl<'a> Trng<'a> {
             }
         }
     }
+
+    pub fn is_enabled(&self) -> bool {
+        self.registers.cr.is_set(CR::RNGEN)
+    }
 }
 
 impl<'a> Entropy32<'a> for Trng<'a> {
