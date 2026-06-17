@@ -370,6 +370,7 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
     }
 
     fn start_key_wrapping(&self, ctx: CryptoContext, key_id: KeyID) {
+        debug!("start wrap");
         let regs = self.registers;
 
         match K::LENGTH {
@@ -384,9 +385,13 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
 
         regs.cr.modify(CR::KMOD::WRAPPED);
         regs.cr.modify(key_id.to_bits());
+        // POLLING FOR KEY TO BE LOADED
+        while !regs.sr.is_set(SR::KEYVALID) {}
         regs.cr.modify(CR::EN::SET);
 
         self.write_input(ctx);
+        debug!("CR: {:02x?}", regs.cr.get());
+        debug!("SR: {:02x?}", regs.sr.get());
         self.state.set(State::Crypt(ctx));
     }
 
@@ -443,6 +448,7 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
     }
 
     pub fn handle_interrupt(&self) {
+        debug!("interrupt");
         if self.registers.isr.is_set(ISR::CCF) {
             self.registers.icr.write(ICR::CCF::SET);
             self.computation_complete();
@@ -486,8 +492,9 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
     }
 
     fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
-        if self.registers.cr.any_matching_bits_set(CR::EN::SET)
-            || self.registers.sr.any_matching_bits_set(SR::BUSY::SET)
+        let regs = self.registers;
+        if regs.cr.any_matching_bits_set(CR::EN::SET)
+            || regs.sr.any_matching_bits_set(SR::BUSY::SET)
         {
             return Err(ErrorCode::BUSY);
         }
@@ -504,7 +511,10 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
                 }
                 return Ok(());
             }
-            _ => return Err(ErrorCode::INVAL),
+            AESKey::Wrapped(key, id) => {
+                regs.cr.modify(CR::MODE::Decrypt);
+                key
+            }
         };
 
         if key.len() != K::LENGTH {
@@ -512,14 +522,14 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
         }
 
         if K::LENGTH == AES128_KEY_SIZE {
-            self.registers.cr.modify(CR::KEYSIZE::AES128);
+            regs.cr.modify(CR::KEYSIZE::AES128);
         } else {
-            self.registers.cr.modify(CR::KEYSIZE::AES256);
+            regs.cr.modify(CR::KEYSIZE::AES256);
         }
 
-        self.registers.cr.modify(CR::KEYSEL::SOFTWARE);
-        self.registers.cr.modify(CR::KEYPROT::ALLOW_TRASNFER);
-        self.registers.cr.modify(CR::KMOD::NORMAL);
+        regs.cr.modify(CR::KEYSEL::SOFTWARE);
+        regs.cr.modify(CR::KEYPROT::ALLOW_TRASNFER);
+        regs.cr.modify(CR::KMOD::NORMAL);
 
         if !self.encrypting.get() {
             self.prepare_decryption_key(key);
@@ -567,6 +577,9 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
         &'static mut [u8],
     )> {
         let state = self.state.get();
+
+        debug!("CR: {:02x?}", self.registers.cr.get());
+        debug!("SR: {:02x?}", self.registers.sr.get());
 
         //  Hardware busy check
         if self.output.is_some() || self.registers.sr.any_matching_bits_set(SR::BUSY::SET) {

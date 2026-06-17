@@ -57,6 +57,7 @@ pub struct TestAES256Ecb<'a, A: 'a> {
     test_keywrap: Option<usize>,
     step: Cell<TestStep>,
     client: OptionalCell<&'static dyn CapsuleTestClient>,
+    first_run: Cell<bool>,
 }
 
 impl<'a, A: AES<'a, AES256> + AESECB> TestAES256Ecb<'a, A> {
@@ -77,30 +78,62 @@ impl<'a, A: AES<'a, AES256> + AESECB> TestAES256Ecb<'a, A> {
             test_keywrap,
             step: Cell::new(TestStep::StandardEnc),
             client: OptionalCell::empty(),
+            first_run: Cell::new(true),
         }
     }
 
-    pub fn run(&self) {
+    fn run_with_keywrap(&'static self, id: usize) {
+        self.aes.enable();
+        self.aes.set_mode_aesecb(true).unwrap();
+        self.key.map(|key| key[..KEY.len()].copy_from_slice(&KEY));
+        assert_eq!(self.aes.set_key(AESKey::Id(id)), Ok(()));
+        self.aes.start_message();
+        match self
+            .aes
+            .crypt(None, self.key.take().unwrap(), 0, AES256_KEY_SIZE)
+        {
+            None => {}
+            Some((result, _, dest_back)) => {
+                self.key.put(Some(dest_back));
+                panic!("crypt() returned error: {:?}", result);
+            }
+        }
+        debug!("sent key");
+    }
+
+    pub fn run(&'static self) {
+        if let Some(id) = self.test_keywrap {
+            if self.first_run.get() {
+                self.run_with_keywrap(id);
+                return;
+            }
+        }
+
         let step = self.step.get();
         let encrypting = is_encrypting(step);
         let in_place = is_in_place(step);
 
-        // Re-initialise hardware for every step except the second chunk, which
-        // intentionally reuses the hardware state to verify key/IV retention.
         if !is_second_chunk(step) {
             self.aes.enable();
             self.aes.set_mode_aesecb(encrypting).unwrap();
-            self.key.map(|key| {
-                key[..KEY.len()].copy_from_slice(&KEY);
-                assert_eq!(self.aes.set_key(AESKey::PlainText(key)), Ok(()));
-            });
+            if let Some(id) = self.test_keywrap {
+                assert_eq!(
+                    self.aes
+                        .set_key(AESKey::Wrapped(self.key.take().unwrap(), id)),
+                    Ok(())
+                );
+            } else {
+                self.key.map(|key| {
+                    key[..KEY.len()].copy_from_slice(&KEY);
+                    assert_eq!(self.aes.set_key(AESKey::PlainText(key)), Ok(()));
+                });
+            }
             let src = if encrypting { &PTXT } else { &CTXT_ECB };
             self.source.map(|s| s[..src.len()].copy_from_slice(src));
             self.aes.start_message();
         }
 
         prepare_in_place(step, in_place, &self.source, &self.data);
-
         let (start, stop) = chunk_range(step);
         run_crypt(self.aes, in_place, &self.source, &self.data, start, stop);
     }
@@ -112,10 +145,19 @@ impl<'a, A: AES<'a, AES256> + AESECB> CapsuleTest for TestAES256Ecb<'a, A> {
     }
 }
 
-impl<'a, A: AES<'a, AES256> + AESECB> hil::symmetric_encryption::Client<'a>
-    for TestAES256Ecb<'a, A>
+impl<A: AES<'static, AES256> + AESECB> hil::symmetric_encryption::Client<'static>
+    for TestAES256Ecb<'static, A>
 {
-    fn crypt_done(&'a self, source: Option<&'static mut [u8]>, dest: &'static mut [u8]) {
+    fn crypt_done(&'static self, source: Option<&'static mut [u8]>, dest: &'static mut [u8]) {
+        if self.first_run.get() {
+            self.first_run.set(false);
+            if self.test_keywrap.is_some() {
+                self.key.replace(dest);
+                debug!("key");
+                self.run();
+                return;
+            }
+        }
         let step = self.step.get();
         let encrypting = is_encrypting(step);
         let in_place = is_in_place(step);

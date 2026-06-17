@@ -273,21 +273,22 @@ unsafe fn start() -> (
     aes.set_client(aes_driver);
 
     let aes_cbc_key = static_init!([u8; 32], [0; 32]);
-    let aes_cbc_iv = static_init!([u8; 16], [0; 16]);
+    // let aes_cbc_iv = static_init!([u8; 16], [0; 16]);
     let aes_cbc_src = static_init!([u8; 64], [0; 64]);
     let aes_cbc_dst = static_init!([u8; 96], [0; 96]);
     let aes_cbc_test = static_init!(
-        capsules_extra::test::aes256::TestAES256Cbc<
+        capsules_extra::test::aes256::TestAES256Ecb<
             'static,
             stm32u545::saes::Saes<'static, AES256>,
         >,
-        capsules_extra::test::aes256::TestAES256Cbc::new(
+        capsules_extra::test::aes256::TestAES256Ecb::new(
             saes,
             aes_cbc_key,
-            aes_cbc_iv,
+            // aes_cbc_iv,
             aes_cbc_src,
             aes_cbc_dst,
-            true
+            true,
+            Some(0)
         )
     );
     saes.set_client(aes_cbc_test);
