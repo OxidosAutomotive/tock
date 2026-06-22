@@ -370,9 +370,9 @@ enum UartDeviceReceiveState {
     Aborting,
 }
 
-pub struct UartDevice<'a, P: SelectionPolicy<&'a Self> = RoundRobinPolicy> {
+pub struct UartDevice<'a, SP: SelectionPolicy<&'a Self> = RoundRobinPolicy> {
     state: Cell<UartDeviceReceiveState>,
-    mux: &'a MuxUart<'a, P>,
+    mux: &'a MuxUart<'a, SP>,
     receiver: bool, // Whether or not to pass this UartDevice incoming messages.
     tx_buffer: TakeCell<'static, [u8]>,
     transmitting: Cell<bool>,
@@ -380,13 +380,13 @@ pub struct UartDevice<'a, P: SelectionPolicy<&'a Self> = RoundRobinPolicy> {
     rx_position: Cell<usize>,
     rx_len: Cell<usize>,
     operation: OptionalCell<Operation>,
-    next: ListLink<'a, UartDevice<'a, P>>,
+    next: ListLink<'a, UartDevice<'a, SP>>,
     rx_client: OptionalCell<&'a dyn uart::ReceiveClient>,
     tx_client: OptionalCell<&'a dyn uart::TransmitClient>,
 }
 
-impl<'a, P: SelectionPolicy<&'a Self>> UartDevice<'a, P> {
-    pub fn new(mux: &'a MuxUart<'a, P>, receiver: bool) -> UartDevice<'a, P> {
+impl<'a, SP: SelectionPolicy<&'a Self>> UartDevice<'a, SP> {
+    pub fn new(mux: &'a MuxUart<'a, SP>, receiver: bool) -> UartDevice<'a, SP> {
         UartDevice {
             state: Cell::new(UartDeviceReceiveState::Idle),
             mux,
@@ -409,7 +409,7 @@ impl<'a, P: SelectionPolicy<&'a Self>> UartDevice<'a, P> {
     }
 }
 
-impl<'a, P: SelectionPolicy<&'a Self>> uart::TransmitClient for UartDevice<'a, P> {
+impl<'a, SP: SelectionPolicy<&'a Self>> uart::TransmitClient for UartDevice<'a, SP> {
     fn transmitted_buffer(
         &self,
         tx_buffer: &'static mut [u8],
@@ -429,7 +429,7 @@ impl<'a, P: SelectionPolicy<&'a Self>> uart::TransmitClient for UartDevice<'a, P
         });
     }
 }
-impl<'a, P: SelectionPolicy<&'a Self>> uart::ReceiveClient for UartDevice<'a, P> {
+impl<'a, SP: SelectionPolicy<&'a Self>> uart::ReceiveClient for UartDevice<'a, SP> {
     fn received_buffer(
         &self,
         rx_buffer: &'static mut [u8],
@@ -444,13 +444,13 @@ impl<'a, P: SelectionPolicy<&'a Self>> uart::ReceiveClient for UartDevice<'a, P>
     }
 }
 
-impl<'a, P: SelectionPolicy<&'a Self>> ListNode<'a, UartDevice<'a, P>> for UartDevice<'a, P> {
-    fn next(&'a self) -> &'a ListLink<'a, UartDevice<'a, P>> {
+impl<'a, SP: SelectionPolicy<&'a Self>> ListNode<'a, UartDevice<'a, SP>> for UartDevice<'a, SP> {
+    fn next(&'a self) -> &'a ListLink<'a, UartDevice<'a, SP>> {
         &self.next
     }
 }
 
-impl<'a, P: SelectionPolicy<&'a Self>> uart::Transmit<'a> for UartDevice<'a, P> {
+impl<'a, SP: SelectionPolicy<&'a Self>> uart::Transmit<'a> for UartDevice<'a, SP> {
     fn set_transmit_client(&self, client: &'a dyn uart::TransmitClient) {
         self.tx_client.set(client);
     }

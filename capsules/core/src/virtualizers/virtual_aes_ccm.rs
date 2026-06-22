@@ -139,23 +139,18 @@ impl CryptFunctionParameters {
 pub struct MuxAES128CCM<
     'a,
     A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
-    P: SelectionPolicy<&'a VirtualAES128CCM<'a, A, P>> = RoundRobinPolicy,
+    SP: SelectionPolicy<&'a VirtualAES128CCM<'a, A, SP>> = RoundRobinPolicy,
 > {
     aes: &'a A,
     client: OptionalCell<&'a dyn symmetric_encryption::Client<'a>>,
-    ccm_clients: List<'a, VirtualAES128CCM<'a, A, P>>,
-    inflight: OptionalCell<&'a VirtualAES128CCM<'a, A, P>>,
+    ccm_clients: List<'a, VirtualAES128CCM<'a, A, SP>>,
+    inflight: OptionalCell<&'a VirtualAES128CCM<'a, A, SP>>,
     deferred_call: DeferredCall,
-    selection_policy: P,
+    selection_policy: SP,
 }
 
-impl<
-        'a,
-        A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
-        P: SelectionPolicy<&'a VirtualAES128CCM<'a, A, P>>,
-    > MuxAES128CCM<'a, A, P>
-{
-    pub fn new(aes: &'a A) -> MuxAES128CCM<'a, A, RoundRobinPolicy> {
+impl<'a, A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB> MuxAES128CCM<'a, A> {
+    pub fn new(aes: &'a A) -> MuxAES128CCM<'a, A> {
         aes.enable(); // enable the hardware, in case it's forgotten elsewhere
         MuxAES128CCM {
             aes,
@@ -166,8 +161,15 @@ impl<
             selection_policy: RoundRobinPolicy::default(),
         }
     }
+}
 
-    pub fn new_with_policy(aes: &'a A, selection_policy: P) -> MuxAES128CCM<'a, A, P> {
+impl<
+        'a,
+        A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
+        SP: SelectionPolicy<&'a VirtualAES128CCM<'a, A, SP>>,
+    > MuxAES128CCM<'a, A, SP>
+{
+    pub fn new_with_policy(aes: &'a A, selection_policy: SP) -> MuxAES128CCM<'a, A, SP> {
         aes.enable(); // enable the hardware, in case it's forgotten elsewhere
         MuxAES128CCM {
             aes,
@@ -224,8 +226,8 @@ impl<
 impl<
         'a,
         A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
-        P: SelectionPolicy<&'a VirtualAES128CCM<'a, A, P>>,
-    > DeferredCallClient for MuxAES128CCM<'a, A, P>
+        SP: SelectionPolicy<&'a VirtualAES128CCM<'a, A, SP>>,
+    > DeferredCallClient for MuxAES128CCM<'a, A, SP>
 {
     fn handle_deferred_call(&self) {
         self.do_next_op();
@@ -239,8 +241,8 @@ impl<
 impl<
         'a,
         A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
-        P: SelectionPolicy<&'a VirtualAES128CCM<'a, A, P>>,
-    > symmetric_encryption::Client<'a> for MuxAES128CCM<'a, A, P>
+        SP: SelectionPolicy<&'a VirtualAES128CCM<'a, A, SP>>,
+    > symmetric_encryption::Client<'a> for MuxAES128CCM<'a, A, SP>
 {
     fn crypt_done(&'a self, source: Option<&'static mut [u8]>, dest: &'static mut [u8]) {
         if self.inflight.is_none() {
@@ -263,11 +265,11 @@ impl<
 pub struct VirtualAES128CCM<
     'a,
     A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
-    P: SelectionPolicy<&'a VirtualAES128CCM<'a, A, P>> = RoundRobinPolicy,
+    SP: SelectionPolicy<&'a VirtualAES128CCM<'a, A, SP>> = RoundRobinPolicy,
 > {
-    mux: &'a MuxAES128CCM<'a, A, P>,
+    mux: &'a MuxAES128CCM<'a, A, SP>,
     aes: &'a A,
-    next: ListLink<'a, VirtualAES128CCM<'a, A, P>>,
+    next: ListLink<'a, VirtualAES128CCM<'a, A, SP>>,
 
     crypt_buf: TakeCell<'static, [u8]>,
     crypt_auth_len: Cell<usize>,
@@ -286,16 +288,13 @@ pub struct VirtualAES128CCM<
     queued_up: OptionalCell<CryptFunctionParameters>,
 }
 
-impl<
-        'a,
-        A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
-        P: SelectionPolicy<&'a VirtualAES128CCM<'a, A, P>>,
-    > VirtualAES128CCM<'a, A, P>
+impl<'a, A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB, SP: SelectionPolicy<&'a Self>>
+    VirtualAES128CCM<'a, A, SP>
 {
     pub fn new(
-        mux: &'a MuxAES128CCM<'a, A, P>,
+        mux: &'a MuxAES128CCM<'a, A, SP>,
         crypt_buf: &'static mut [u8],
-    ) -> VirtualAES128CCM<'a, A, P> {
+    ) -> VirtualAES128CCM<'a, A, SP> {
         VirtualAES128CCM {
             mux,
             aes: mux.aes,
@@ -697,11 +696,8 @@ impl<
     }
 }
 
-impl<
-        'a,
-        A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
-        P: SelectionPolicy<&'a VirtualAES128CCM<'a, A, P>>,
-    > symmetric_encryption::AES128CCM<'a> for VirtualAES128CCM<'a, A, P>
+impl<'a, A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB, SP: SelectionPolicy<&'a Self>>
+    symmetric_encryption::AES128CCM<'a> for VirtualAES128CCM<'a, A, SP>
 {
     fn set_client(&self, client: &'a dyn symmetric_encryption::CCMClient) {
         self.ccm_client.set(client);
@@ -763,11 +759,8 @@ impl<
     }
 }
 
-impl<
-        'a,
-        A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
-        P: SelectionPolicy<&'a VirtualAES128CCM<'a, A, P>>,
-    > symmetric_encryption::AES128<'a> for VirtualAES128CCM<'a, A, P>
+impl<'a, A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB, P: SelectionPolicy<&'a Self>>
+    symmetric_encryption::AES128<'a> for VirtualAES128CCM<'a, A, P>
 {
     fn enable(&self) {
         self.aes.enable();
@@ -822,11 +815,8 @@ impl<
     }
 }
 
-impl<
-        'a,
-        A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
-        P: SelectionPolicy<&'a VirtualAES128CCM<'a, A, P>>,
-    > AES128Ctr for VirtualAES128CCM<'a, A, P>
+impl<'a, A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB, SP: SelectionPolicy<&'a Self>> AES128Ctr
+    for VirtualAES128CCM<'a, A, SP>
 {
     fn set_mode_aes128ctr(&self, encrypting: bool) -> Result<(), ErrorCode> {
         if self.mux.inflight.is_none() {
@@ -837,11 +827,8 @@ impl<
     }
 }
 
-impl<
-        'a,
-        A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
-        P: SelectionPolicy<&'a VirtualAES128CCM<'a, A, P>>,
-    > AES128ECB for VirtualAES128CCM<'a, A, P>
+impl<'a, A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB, SP: SelectionPolicy<&'a Self>> AES128ECB
+    for VirtualAES128CCM<'a, A, SP>
 {
     fn set_mode_aes128ecb(&self, encrypting: bool) -> Result<(), ErrorCode> {
         if self.mux.inflight.is_none() {
@@ -852,11 +839,8 @@ impl<
     }
 }
 
-impl<
-        'a,
-        A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
-        P: SelectionPolicy<&'a VirtualAES128CCM<'a, A, P>>,
-    > AES128CBC for VirtualAES128CCM<'a, A, P>
+impl<'a, A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB, SP: SelectionPolicy<&'a Self>> AES128CBC
+    for VirtualAES128CCM<'a, A, SP>
 {
     fn set_mode_aes128cbc(&self, encrypting: bool) -> Result<(), ErrorCode> {
         if self.mux.inflight.is_none() {
@@ -867,11 +851,8 @@ impl<
     }
 }
 
-impl<
-        'a,
-        A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
-        P: SelectionPolicy<&'a VirtualAES128CCM<'a, A, P>>,
-    > symmetric_encryption::Client<'a> for VirtualAES128CCM<'a, A, P>
+impl<'a, A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB, SP: SelectionPolicy<&'a Self>>
+    symmetric_encryption::Client<'a> for VirtualAES128CCM<'a, A, SP>
 {
     fn crypt_done(&self, _: Option<&'static mut [u8]>, crypt_buf: &'static mut [u8]) {
         self.crypt_buf.replace(crypt_buf);
@@ -961,13 +942,10 @@ impl<
 }
 
 // Fit in the linked list
-impl<
-        'a,
-        A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB,
-        P: SelectionPolicy<&'a VirtualAES128CCM<'a, A, P>>,
-    > ListNode<'a, VirtualAES128CCM<'a, A, P>> for VirtualAES128CCM<'a, A, P>
+impl<'a, A: AES128<'a> + AES128Ctr + AES128CBC + AES128ECB, SP: SelectionPolicy<&'a Self>>
+    ListNode<'a, VirtualAES128CCM<'a, A, SP>> for VirtualAES128CCM<'a, A, SP>
 {
-    fn next(&'a self) -> &'a ListLink<'a, VirtualAES128CCM<'a, A, P>> {
+    fn next(&'a self) -> &'a ListLink<'a, VirtualAES128CCM<'a, A, SP>> {
         &self.next
     }
 }

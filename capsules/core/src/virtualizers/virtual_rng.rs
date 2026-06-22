@@ -20,18 +20,16 @@ enum Op {
 // Struct to manage multiple rng requests
 pub struct MuxRngMaster<
     'a,
-    P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>> = RoundRobinPolicy,
+    SP: SelectionPolicy<&'a VirtualRngMasterDevice<'a, SP>> = RoundRobinPolicy,
 > {
     rng: &'a dyn Rng<'a>,
-    devices: List<'a, VirtualRngMasterDevice<'a, P>>,
-    inflight: OptionalCell<&'a VirtualRngMasterDevice<'a, P>>,
-    selection_policy: P,
+    devices: List<'a, VirtualRngMasterDevice<'a, SP>>,
+    inflight: OptionalCell<&'a VirtualRngMasterDevice<'a, SP>>,
+    selection_policy: SP,
 }
 
-impl<'a, P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>>> MuxRngMaster<'a, P> {
-    // NOTE(frihetselsker): Can we remove const?
-    // pub const fn new(rng: &'a dyn Rng<'a>) -> MuxRngMaster<'a> {
-    pub fn new(rng: &'a dyn Rng<'a>) -> MuxRngMaster<'a, RoundRobinPolicy> {
+impl<'a> MuxRngMaster<'a> {
+    pub fn new(rng: &'a dyn Rng<'a>) -> MuxRngMaster<'a> {
         MuxRngMaster {
             rng,
             devices: List::new(),
@@ -39,8 +37,10 @@ impl<'a, P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>>> MuxRngMaster<'a,
             selection_policy: RoundRobinPolicy::default(),
         }
     }
+}
 
-    pub fn new_with_policy(rng: &'a dyn Rng<'a>, selection_policy: P) -> MuxRngMaster<'a, P> {
+impl<'a, SP: SelectionPolicy<&'a VirtualRngMasterDevice<'a, SP>>> MuxRngMaster<'a, SP> {
+    pub fn new_with_policy(rng: &'a dyn Rng<'a>, selection_policy: SP) -> MuxRngMaster<'a, SP> {
         MuxRngMaster {
             rng,
             devices: List::new(),
@@ -87,7 +87,7 @@ impl<'a, P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>>> MuxRngMaster<'a,
     }
 }
 
-impl<'a, P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>>> Client for MuxRngMaster<'a, P> {
+impl<'a, SP: SelectionPolicy<&'a VirtualRngMasterDevice<'a, SP>>> Client for MuxRngMaster<'a, SP> {
     fn randomness_available(
         &self,
         _randomness: &mut dyn Iterator<Item = u32>,
@@ -107,29 +107,24 @@ impl<'a, P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>>> Client for MuxRn
 }
 
 // Struct for a single rng device
-pub struct VirtualRngMasterDevice<
-    'a,
-    P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>> = RoundRobinPolicy,
-> {
+pub struct VirtualRngMasterDevice<'a, SP: SelectionPolicy<&'a Self> = RoundRobinPolicy> {
     //reference to the mux
-    mux: &'a MuxRngMaster<'a, P>,
+    mux: &'a MuxRngMaster<'a, SP>,
     // Pointer to next element in the list of devices
-    next: ListLink<'a, VirtualRngMasterDevice<'a, P>>,
+    next: ListLink<'a, Self>,
     client: OptionalCell<&'a dyn Client>,
     operation: Cell<Op>,
 }
 
 // Implement ListNode trait for virtual rng device
-impl<'a, P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>>>
-    ListNode<'a, VirtualRngMasterDevice<'a, P>> for VirtualRngMasterDevice<'a, P>
-{
-    fn next(&self) -> &'a ListLink<'_, VirtualRngMasterDevice<'a, P>> {
+impl<'a, SP: SelectionPolicy<&'a Self>> ListNode<'a, Self> for VirtualRngMasterDevice<'a, SP> {
+    fn next(&self) -> &'a ListLink<'_, VirtualRngMasterDevice<'a, SP>> {
         &self.next
     }
 }
 
-impl<'a, P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>>> VirtualRngMasterDevice<'a, P> {
-    pub const fn new(mux: &'a MuxRngMaster<'a, P>) -> VirtualRngMasterDevice<'a, P> {
+impl<'a, SP: SelectionPolicy<&'a Self>> VirtualRngMasterDevice<'a, SP> {
+    pub const fn new(mux: &'a MuxRngMaster<'a, SP>) -> VirtualRngMasterDevice<'a, SP> {
         VirtualRngMasterDevice {
             mux,
             next: ListLink::empty(),
@@ -139,18 +134,14 @@ impl<'a, P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>>> VirtualRngMaster
     }
 }
 
-impl<'a, P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>>>
-    PartialEq<VirtualRngMasterDevice<'a, P>> for VirtualRngMasterDevice<'a, P>
-{
-    fn eq(&self, other: &VirtualRngMasterDevice<'a, P>) -> bool {
+impl<'a, SP: SelectionPolicy<&'a Self>> PartialEq<Self> for VirtualRngMasterDevice<'a, SP> {
+    fn eq(&self, other: &Self) -> bool {
         // Check whether two rng devices point to the same device
         core::ptr::eq(self, other)
     }
 }
 
-impl<'a, P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>>> Rng<'a>
-    for VirtualRngMasterDevice<'a, P>
-{
+impl<'a, SP: SelectionPolicy<&'a Self>> Rng<'a> for VirtualRngMasterDevice<'a, SP> {
     fn get(&self) -> Result<(), ErrorCode> {
         self.operation.set(Op::Get);
         self.mux.do_next_op()
@@ -187,9 +178,7 @@ impl<'a, P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>>> Rng<'a>
     }
 }
 
-impl<'a, P: SelectionPolicy<&'a VirtualRngMasterDevice<'a, P>>> Client
-    for VirtualRngMasterDevice<'a, P>
-{
+impl<'a, SP: SelectionPolicy<&'a Self>> Client for VirtualRngMasterDevice<'a, SP> {
     fn randomness_available(
         &self,
         randomness: &mut dyn Iterator<Item = u32>,

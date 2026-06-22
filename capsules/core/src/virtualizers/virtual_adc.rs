@@ -17,16 +17,16 @@ use crate::virtualizers::selection_policy::{RoundRobinPolicy, SelectionPolicy};
 pub struct MuxAdc<
     'a,
     A: hil::adc::Adc<'a>,
-    P: SelectionPolicy<&'a AdcDevice<'a, A, P>> = RoundRobinPolicy,
+    SP: SelectionPolicy<&'a AdcDevice<'a, A, SP>> = RoundRobinPolicy,
 > {
     adc: &'a A,
-    devices: List<'a, AdcDevice<'a, A, P>>,
-    inflight: OptionalCell<&'a AdcDevice<'a, A, P>>,
-    selection_policy: P,
+    devices: List<'a, AdcDevice<'a, A, SP>>,
+    inflight: OptionalCell<&'a AdcDevice<'a, A, SP>>,
+    selection_policy: SP,
 }
 
-impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> hil::adc::Client
-    for MuxAdc<'a, A, P>
+impl<'a, A: hil::adc::Adc<'a>, SP: SelectionPolicy<&'a AdcDevice<'a, A, SP>>> hil::adc::Client
+    for MuxAdc<'a, A, SP>
 {
     fn sample_ready(&self, sample: u16) {
         self.inflight.take().map(|inflight| {
@@ -44,8 +44,8 @@ impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> hil:
     }
 }
 
-impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> MuxAdc<'a, A, P> {
-    pub fn new(adc: &'a A) -> MuxAdc<'a, A, RoundRobinPolicy> {
+impl<'a, A: hil::adc::Adc<'a>> MuxAdc<'a, A> {
+    pub fn new(adc: &'a A) -> MuxAdc<'a, A> {
         MuxAdc {
             adc,
             devices: List::new(),
@@ -53,8 +53,10 @@ impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> MuxA
             selection_policy: RoundRobinPolicy::default(),
         }
     }
+}
 
-    pub fn new_with_policy(adc: &'a A, selection_policy: P) -> MuxAdc<'a, A, P> {
+impl<'a, A: hil::adc::Adc<'a>, SP: SelectionPolicy<&'a AdcDevice<'a, A, SP>>> MuxAdc<'a, A, SP> {
+    pub fn new_with_policy(adc: &'a A, selection_policy: SP) -> MuxAdc<'a, A, SP> {
         MuxAdc {
             adc,
             devices: List::new(),
@@ -99,16 +101,16 @@ pub(crate) enum Operation {
 }
 
 /// Virtual ADC device
-pub struct AdcDevice<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> {
-    mux: &'a MuxAdc<'a, A, P>,
+pub struct AdcDevice<'a, A: hil::adc::Adc<'a>, SP: SelectionPolicy<&'a Self> = RoundRobinPolicy> {
+    mux: &'a MuxAdc<'a, A, SP>,
     channel: A::Channel,
     operation: OptionalCell<Operation>,
-    next: ListLink<'a, AdcDevice<'a, A, P>>,
+    next: ListLink<'a, AdcDevice<'a, A, SP>>,
     client: OptionalCell<&'a dyn hil::adc::Client>,
 }
 
-impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> AdcDevice<'a, A, P> {
-    pub const fn new(mux: &'a MuxAdc<'a, A, P>, channel: A::Channel) -> AdcDevice<'a, A, P> {
+impl<'a, A: hil::adc::Adc<'a>, SP: SelectionPolicy<&'a Self>> AdcDevice<'a, A, SP> {
+    pub const fn new(mux: &'a MuxAdc<'a, A, SP>, channel: A::Channel) -> AdcDevice<'a, A, SP> {
         let adc_user = AdcDevice {
             mux,
             channel,
@@ -124,16 +126,16 @@ impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> AdcD
     }
 }
 
-impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>>
-    ListNode<'a, AdcDevice<'a, A, P>> for AdcDevice<'a, A, P>
+impl<'a, A: hil::adc::Adc<'a>, SP: SelectionPolicy<&'a Self>> ListNode<'a, AdcDevice<'a, A, SP>>
+    for AdcDevice<'a, A, SP>
 {
-    fn next(&'a self) -> &'a ListLink<'a, AdcDevice<'a, A, P>> {
+    fn next(&'a self) -> &'a ListLink<'a, AdcDevice<'a, A, SP>> {
         &self.next
     }
 }
 
-impl<'a, A: hil::adc::Adc<'a>, P: SelectionPolicy<&'a AdcDevice<'a, A, P>>> hil::adc::AdcChannel<'a>
-    for AdcDevice<'a, A, P>
+impl<'a, A: hil::adc::Adc<'a>, SP: SelectionPolicy<&'a Self>> hil::adc::AdcChannel<'a>
+    for AdcDevice<'a, A, SP>
 {
     fn sample(&self) -> Result<(), ErrorCode> {
         self.operation.set(Operation::OneSample);

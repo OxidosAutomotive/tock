@@ -20,28 +20,28 @@ pub struct MuxI2C<
     'a,
     I: i2c::I2CMaster<'a>,
     S: i2c::SMBusMaster<'a> = NoSMBus,
-    PI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, PI, PS>> = RoundRobinPolicy,
-    PS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, PI, PS>> = RoundRobinPolicy,
+    SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>> = RoundRobinPolicy,
+    SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>> = RoundRobinPolicy,
 > {
     i2c: &'a I,
     smbus: Option<&'a S>,
-    i2c_devices: List<'a, I2CDevice<'a, I, S, PI, PS>>,
-    smbus_devices: List<'a, SMBusDevice<'a, I, S, PI, PS>>,
+    i2c_devices: List<'a, I2CDevice<'a, I, SPI, S, SPS>>,
+    smbus_devices: List<'a, SMBusDevice<'a, I, S, SPS, SPI>>,
     enabled: Cell<usize>,
-    i2c_inflight: OptionalCell<&'a I2CDevice<'a, I, S, PI, PS>>,
-    smbus_inflight: OptionalCell<&'a SMBusDevice<'a, I, S, PI, PS>>,
+    i2c_inflight: OptionalCell<&'a I2CDevice<'a, I, SPI, S, SPS>>,
+    smbus_inflight: OptionalCell<&'a SMBusDevice<'a, I, S, SPS, SPI>>,
     deferred_call: DeferredCall,
-    i2c_selection_policy: PI,
-    smbus_selection_policy: PS,
+    i2c_selection_policy: SPI,
+    smbus_selection_policy: SPS,
 }
 
 impl<
         'a,
         I: i2c::I2CMaster<'a>,
         S: i2c::SMBusMaster<'a>,
-        PI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, PI, PS>>,
-        PS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, PI, PS>>,
-    > I2CHwMasterClient for MuxI2C<'a, I, S, PI, PS>
+        SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>>,
+        SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>>,
+    > I2CHwMasterClient for MuxI2C<'a, I, S, SPI, SPS>
 {
     fn command_complete(&self, buffer: &'static mut [u8], status: Result<(), Error>) {
         if self.i2c_inflight.is_some() {
@@ -57,18 +57,8 @@ impl<
     }
 }
 
-impl<
-        'a,
-        I: i2c::I2CMaster<'a>,
-        S: i2c::SMBusMaster<'a>,
-        PI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, PI, PS>>,
-        PS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, PI, PS>>,
-    > MuxI2C<'a, I, S, PI, PS>
-{
-    pub fn new(
-        i2c: &'a I,
-        smbus: Option<&'a S>,
-    ) -> MuxI2C<'a, I, S, RoundRobinPolicy, RoundRobinPolicy> {
+impl<'a, I: i2c::I2CMaster<'a>, S: i2c::SMBusMaster<'a>> MuxI2C<'a, I, S> {
+    pub fn new(i2c: &'a I, smbus: Option<&'a S>) -> MuxI2C<'a, I, S> {
         MuxI2C {
             i2c,
             smbus,
@@ -82,13 +72,22 @@ impl<
             smbus_selection_policy: RoundRobinPolicy::default(),
         }
     }
+}
 
+impl<
+        'a,
+        I: i2c::I2CMaster<'a>,
+        S: i2c::SMBusMaster<'a>,
+        SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>>,
+        SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>>,
+    > MuxI2C<'a, I, S, SPI, SPS>
+{
     pub fn new_with_policy(
         i2c: &'a I,
         smbus: Option<&'a S>,
-        i2c_selection_policy: PI,
-        smbus_selection_policy: PS,
-    ) -> MuxI2C<'a, I, S, PI, PS> {
+        i2c_selection_policy: SPI,
+        smbus_selection_policy: SPS,
+    ) -> MuxI2C<'a, I, S, SPI, SPS> {
         MuxI2C {
             i2c,
             smbus,
@@ -239,9 +238,9 @@ impl<
         'a,
         I: i2c::I2CMaster<'a>,
         S: i2c::SMBusMaster<'a>,
-        PI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, PI, PS>>,
-        PS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, PI, PS>>,
-    > DeferredCallClient for MuxI2C<'a, I, S, PI, PS>
+        SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>>,
+        SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>>,
+    > DeferredCallClient for MuxI2C<'a, I, S, SPI, SPS>
 {
     fn handle_deferred_call(&self) {
         self.do_next_op();
@@ -264,27 +263,28 @@ enum Op {
 pub struct I2CDevice<
     'a,
     I: i2c::I2CMaster<'a>,
+    SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>> = RoundRobinPolicy,
     S: i2c::SMBusMaster<'a> = NoSMBus,
-    PI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, PI, PS>> = RoundRobinPolicy,
-    PS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, PI, PS>> = RoundRobinPolicy,
+    SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>> = RoundRobinPolicy,
 > {
-    mux: &'a MuxI2C<'a, I, S, PI, PS>,
+    mux: &'a MuxI2C<'a, I, S, SPI, SPS>,
     addr: u8,
     enabled: Cell<bool>,
     buffer: TakeCell<'static, [u8]>,
     operation: Cell<Op>,
-    next: ListLink<'a, I2CDevice<'a, I, S, PI, PS>>,
+    next: ListLink<'a, I2CDevice<'a, I, SPI, S, SPS>>,
     client: OptionalCell<&'a dyn I2CClient>,
 }
 
 impl<
         'a,
         I: i2c::I2CMaster<'a>,
+        SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>>,
         S: i2c::SMBusMaster<'a>,
-        SP: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, SP>>,
-    > I2CDevice<'a, I, S, SP>
+        SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>>,
+    > I2CDevice<'a, I, SPI, S, SPS>
 {
-    pub fn new(mux: &'a MuxI2C<'a, I, S, SP>, addr: u8) -> I2CDevice<'a, I, S, SP> {
+    pub fn new(mux: &'a MuxI2C<'a, I, S, SPI, SPS>, addr: u8) -> I2CDevice<'a, I, SPI, S, SPS> {
         I2CDevice {
             mux,
             addr,
@@ -305,10 +305,10 @@ impl<
 impl<
         'a,
         I: i2c::I2CMaster<'a>,
+        SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>>,
         S: i2c::SMBusMaster<'a>,
-        PI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, PI, PS>>,
-        PS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, PI, PS>>,
-    > I2CClient for I2CDevice<'a, I, S, PI, PS>
+        SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>>,
+    > I2CClient for I2CDevice<'a, I, SPI, S, SPS>
 {
     fn command_complete(&self, buffer: &'static mut [u8], status: Result<(), Error>) {
         self.client.map(move |client| {
@@ -320,18 +320,19 @@ impl<
 impl<
         'a,
         I: i2c::I2CMaster<'a>,
+        SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>>,
         S: i2c::SMBusMaster<'a>,
-        PI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, PI, PS>>,
-        PS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, PI, PS>>,
-    > ListNode<'a, I2CDevice<'a, I, S, PI, PS>> for I2CDevice<'a, I, S, PI, PS>
+        SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>>,
+    > ListNode<'a, I2CDevice<'a, I, SPI, S, SPS>> for I2CDevice<'a, I, SPI, S, SPS>
 {
-    fn next(&'a self) -> &'a ListLink<'a, I2CDevice<'a, I, S, PI, PS>> {
+    fn next(&'a self) -> &'a ListLink<'a, I2CDevice<'a, I, SPI, S, SPS>> {
         &self.next
     }
 }
 
-// NOTE(frihetselsker): Do I need to add other generics?
-impl<'a, I: i2c::I2CMaster<'a>> i2c::I2CDevice for I2CDevice<'a, I> {
+impl<'a, I: i2c::I2CMaster<'a>, SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI>>> i2c::I2CDevice
+    for I2CDevice<'a, I, SPI>
+{
     fn enable(&self) {
         if !self.enabled.get() {
             self.enabled.set(true);
@@ -393,15 +394,15 @@ pub struct SMBusDevice<
     'a,
     I: i2c::I2CMaster<'a>,
     S: i2c::SMBusMaster<'a>,
-    PI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, PI, PS>> = RoundRobinPolicy,
-    PS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, PI, PS>> = RoundRobinPolicy,
+    SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>> = RoundRobinPolicy,
+    SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>> = RoundRobinPolicy,
 > {
-    mux: &'a MuxI2C<'a, I, S, PI, PS>,
+    mux: &'a MuxI2C<'a, I, S, SPI, SPS>,
     addr: u8,
     enabled: Cell<bool>,
     buffer: TakeCell<'static, [u8]>,
     operation: Cell<Op>,
-    next: ListLink<'a, SMBusDevice<'a, I, S, PI, PS>>,
+    next: ListLink<'a, SMBusDevice<'a, I, S, SPS, SPI>>,
     client: OptionalCell<&'a dyn I2CClient>,
 }
 
@@ -409,11 +410,11 @@ impl<
         'a,
         I: i2c::I2CMaster<'a>,
         S: i2c::SMBusMaster<'a>,
-        PI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, PI, PS>>,
-        PS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, PI, PS>>,
-    > SMBusDevice<'a, I, S, PI, PS>
+        SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>>,
+        SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>>,
+    > SMBusDevice<'a, I, S, SPS, SPI>
 {
-    pub fn new(mux: &'a MuxI2C<'a, I, S, PI, PS>, addr: u8) -> SMBusDevice<'a, I, S, PI, PS> {
+    pub fn new(mux: &'a MuxI2C<'a, I, S, SPI, SPS>, addr: u8) -> SMBusDevice<'a, I, S, SPS, SPI> {
         if mux.smbus.is_none() {
             panic!("There is no SMBus to attach to");
         }
@@ -439,9 +440,9 @@ impl<
         'a,
         I: i2c::I2CMaster<'a>,
         S: i2c::SMBusMaster<'a>,
-        PI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, PI, PS>>,
-        PS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, PI, PS>>,
-    > I2CClient for SMBusDevice<'a, I, S, PI, PS>
+        SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>>,
+        SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>>,
+    > I2CClient for SMBusDevice<'a, I, S, SPS, SPI>
 {
     fn command_complete(&self, buffer: &'static mut [u8], status: Result<(), Error>) {
         self.client.map(move |client| {
@@ -454,11 +455,11 @@ impl<
         'a,
         I: i2c::I2CMaster<'a>,
         S: i2c::SMBusMaster<'a>,
-        PI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, PI, PS>>,
-        PS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, PI, PS>>,
-    > ListNode<'a, SMBusDevice<'a, I, S, PI, PS>> for SMBusDevice<'a, I, S, PI, PS>
+        SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>>,
+        SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>>,
+    > ListNode<'a, SMBusDevice<'a, I, S, SPS, SPI>> for SMBusDevice<'a, I, S, SPS, SPI>
 {
-    fn next(&'a self) -> &'a ListLink<'a, SMBusDevice<'a, I, S, PI, PS>> {
+    fn next(&'a self) -> &'a ListLink<'a, SMBusDevice<'a, I, S, SPS, SPI>> {
         &self.next
     }
 }
@@ -467,9 +468,9 @@ impl<
         'a,
         I: i2c::I2CMaster<'a>,
         S: i2c::SMBusMaster<'a>,
-        PI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, PI, PS>>,
-        PS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, PI, PS>>,
-    > i2c::I2CDevice for SMBusDevice<'a, I, S, PI, PS>
+        SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>>,
+        SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>>,
+    > i2c::I2CDevice for SMBusDevice<'a, I, S, SPS, SPI>
 {
     fn enable(&self) {
         if !self.enabled.get() {
@@ -532,9 +533,9 @@ impl<
         'a,
         I: i2c::I2CMaster<'a>,
         S: i2c::SMBusMaster<'a>,
-        PI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, S, PI, PS>>,
-        PS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, PI, PS>>,
-    > i2c::SMBusDevice for SMBusDevice<'a, I, S, PI, PS>
+        SPI: 'a + SelectionPolicy<&'a I2CDevice<'a, I, SPI, S, SPS>>,
+        SPS: 'a + SelectionPolicy<&'a SMBusDevice<'a, I, S, SPS, SPI>>,
+    > i2c::SMBusDevice for SMBusDevice<'a, I, S, SPS, SPI>
 {
     fn smbus_write_read(
         &self,

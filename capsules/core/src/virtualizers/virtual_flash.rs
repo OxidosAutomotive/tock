@@ -48,16 +48,16 @@ use crate::virtualizers::selection_policy::{RoundRobinPolicy, SelectionPolicy};
 pub struct MuxFlash<
     'a,
     F: hil::flash::Flash + 'static,
-    P: SelectionPolicy<&'a FlashUser<'a, F, P>> = RoundRobinPolicy,
+    SP: SelectionPolicy<&'a FlashUser<'a, F, SP>> = RoundRobinPolicy,
 > {
     flash: &'a F,
-    users: List<'a, FlashUser<'a, F, P>>,
-    inflight: OptionalCell<&'a FlashUser<'a, F, P>>,
-    selection_policy: P,
+    users: List<'a, FlashUser<'a, F, SP>>,
+    inflight: OptionalCell<&'a FlashUser<'a, F, SP>>,
+    selection_policy: SP,
 }
 
-impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> hil::flash::Client<F>
-    for MuxFlash<'a, F, P>
+impl<'a, F: hil::flash::Flash, SP: SelectionPolicy<&'a FlashUser<'a, F, SP>>> hil::flash::Client<F>
+    for MuxFlash<'a, F, SP>
 {
     fn read_complete(
         &self,
@@ -89,10 +89,8 @@ impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> hil:
     }
 }
 
-impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> MuxFlash<'a, F, P> {
-    // NOTE(frihetselsker): can I remove const?
-    // pub const fn new(flash: &'a F) -> MuxFlash<'a, F, RoundRobinPolicy> {
-    pub fn new(flash: &'a F) -> MuxFlash<'a, F, RoundRobinPolicy> {
+impl<'a, F: hil::flash::Flash> MuxFlash<'a, F> {
+    pub fn new(flash: &'a F) -> MuxFlash<'a, F> {
         MuxFlash {
             flash,
             users: List::new(),
@@ -100,8 +98,10 @@ impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> MuxF
             selection_policy: RoundRobinPolicy::default(),
         }
     }
+}
 
-    pub fn new_with_policy(flash: &'a F, selection_policy: P) -> MuxFlash<'a, F, P> {
+impl<'a, F: hil::flash::Flash, SP: SelectionPolicy<&'a FlashUser<'a, F, SP>>> MuxFlash<'a, F, SP> {
+    pub fn new_with_policy(flash: &'a F, selection_policy: SP) -> MuxFlash<'a, F, SP> {
         MuxFlash {
             flash,
             users: List::new(),
@@ -168,17 +168,17 @@ enum Op {
 pub struct FlashUser<
     'a,
     F: hil::flash::Flash + 'static,
-    P: SelectionPolicy<&'a FlashUser<'a, F, P>>,
+    SP: SelectionPolicy<&'a FlashUser<'a, F, SP>> = RoundRobinPolicy,
 > {
-    mux: &'a MuxFlash<'a, F, P>,
+    mux: &'a MuxFlash<'a, F, SP>,
     buffer: TakeCell<'static, F::Page>,
     operation: Cell<Op>,
-    next: ListLink<'a, FlashUser<'a, F, P>>,
-    client: OptionalCell<&'a dyn hil::flash::Client<FlashUser<'a, F, P>>>,
+    next: ListLink<'a, FlashUser<'a, F, SP>>,
+    client: OptionalCell<&'a dyn hil::flash::Client<FlashUser<'a, F, SP>>>,
 }
 
-impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> FlashUser<'a, F, P> {
-    pub fn new(mux: &'a MuxFlash<'a, F, P>) -> FlashUser<'a, F, P> {
+impl<'a, F: hil::flash::Flash, SP: SelectionPolicy<&'a Self>> FlashUser<'a, F, SP> {
+    pub fn new(mux: &'a MuxFlash<'a, F, SP>) -> FlashUser<'a, F, SP> {
         FlashUser {
             mux,
             buffer: TakeCell::empty(),
@@ -193,8 +193,8 @@ impl<
         'a,
         F: hil::flash::Flash,
         C: hil::flash::Client<Self>,
-        P: SelectionPolicy<&'a FlashUser<'a, F, P>>,
-    > hil::flash::HasClient<'a, C> for FlashUser<'a, F, P>
+        SP: SelectionPolicy<&'a FlashUser<'a, F, SP>>,
+    > hil::flash::HasClient<'a, C> for FlashUser<'a, F, SP>
 {
     fn set_client(&'a self, client: &'a C) {
         self.mux.users.push_head(self);
@@ -202,8 +202,8 @@ impl<
     }
 }
 
-impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> hil::flash::Client<F>
-    for FlashUser<'a, F, P>
+impl<'a, F: hil::flash::Flash, SP: SelectionPolicy<&'a FlashUser<'a, F, SP>>> hil::flash::Client<F>
+    for FlashUser<'a, F, SP>
 {
     fn read_complete(
         &self,
@@ -232,16 +232,16 @@ impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> hil:
     }
 }
 
-impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>>
-    ListNode<'a, FlashUser<'a, F, P>> for FlashUser<'a, F, P>
+impl<'a, F: hil::flash::Flash, SP: SelectionPolicy<&'a Self>> ListNode<'a, FlashUser<'a, F, SP>>
+    for FlashUser<'a, F, SP>
 {
-    fn next(&'a self) -> &'a ListLink<'a, FlashUser<'a, F, P>> {
+    fn next(&'a self) -> &'a ListLink<'a, FlashUser<'a, F, SP>> {
         &self.next
     }
 }
 
-impl<'a, F: hil::flash::Flash, P: SelectionPolicy<&'a FlashUser<'a, F, P>>> hil::flash::Flash
-    for FlashUser<'a, F, P>
+impl<'a, F: hil::flash::Flash, SP: SelectionPolicy<&'a FlashUser<'a, F, SP>>> hil::flash::Flash
+    for FlashUser<'a, F, SP>
 {
     type Page = F::Page;
 

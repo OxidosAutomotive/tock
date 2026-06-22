@@ -31,17 +31,19 @@ use kernel::ErrorCode;
 
 use crate::virtualizers::selection_policy::{RoundRobinPolicy, SelectionPolicy};
 
-pub struct MuxPwm<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>> {
+pub struct MuxPwm<
+    'a,
+    P: hil::pwm::Pwm,
+    SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>> = RoundRobinPolicy,
+> {
     pwm: &'a P,
     devices: List<'a, PwmPinUser<'a, P, SP>>,
     inflight: OptionalCell<&'a PwmPinUser<'a, P, SP>>,
     selection_policy: SP,
 }
 
-impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>> MuxPwm<'a, P, SP> {
-    // NOTE(frihetselsker): can we remove const?
-    // pub const fn new(pwm: &'a P) -> MuxPwm<'a, P, RoundRobinPolicy> {
-    pub fn new(pwm: &'a P) -> MuxPwm<'a, P, RoundRobinPolicy> {
+impl<'a, P: hil::pwm::Pwm> MuxPwm<'a, P> {
+    pub fn new(pwm: &'a P) -> MuxPwm<'a, P> {
         MuxPwm {
             pwm,
             devices: List::new(),
@@ -49,7 +51,9 @@ impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>> MuxPw
             selection_policy: RoundRobinPolicy::default(),
         }
     }
+}
 
+impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>> MuxPwm<'a, P, SP> {
     pub fn new_with_policy(pwm: &'a P, selection_policy: SP) -> MuxPwm<'a, P, SP> {
         MuxPwm {
             pwm,
@@ -125,18 +129,14 @@ enum Operation {
     Stop,
 }
 
-pub struct PwmPinUser<
-    'a,
-    P: hil::pwm::Pwm,
-    SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>> = RoundRobinPolicy,
-> {
+pub struct PwmPinUser<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a Self> = RoundRobinPolicy> {
     mux: &'a MuxPwm<'a, P, SP>,
     pin: P::Pin,
     operation: OptionalCell<Operation>,
     next: ListLink<'a, PwmPinUser<'a, P, SP>>,
 }
 
-impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>> PwmPinUser<'a, P, SP> {
+impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a Self>> PwmPinUser<'a, P, SP> {
     pub const fn new(mux: &'a MuxPwm<'a, P, SP>, pin: P::Pin) -> PwmPinUser<'a, P, SP> {
         PwmPinUser {
             mux,
@@ -151,15 +151,15 @@ impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>> PwmPi
     }
 }
 
-impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>>
-    ListNode<'a, PwmPinUser<'a, P, SP>> for PwmPinUser<'a, P, SP>
+impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a Self>> ListNode<'a, PwmPinUser<'a, P, SP>>
+    for PwmPinUser<'a, P, SP>
 {
     fn next(&'a self) -> &'a ListLink<'a, PwmPinUser<'a, P, SP>> {
         &self.next
     }
 }
 
-impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a PwmPinUser<'a, P, SP>>> hil::pwm::PwmPin
+impl<'a, P: hil::pwm::Pwm, SP: SelectionPolicy<&'a Self>> hil::pwm::PwmPin
     for PwmPinUser<'a, P, SP>
 {
     fn start(&self, frequency_hz: usize, duty_cycle: usize) -> Result<(), ErrorCode> {
