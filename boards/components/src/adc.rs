@@ -6,7 +6,6 @@
 
 use capsules_core::adc::AdcDedicated;
 use capsules_core::adc::AdcVirtualized;
-use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
 use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_adc::{AdcDevice, MuxAdc};
 use core::marker::PhantomData;
