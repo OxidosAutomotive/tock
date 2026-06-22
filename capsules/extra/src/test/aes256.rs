@@ -58,6 +58,7 @@ pub struct TestAES256Ecb<'a, A: 'a> {
     step: Cell<TestStep>,
     client: OptionalCell<&'static dyn CapsuleTestClient>,
     first_run: Cell<bool>,
+    key_loaded: Cell<bool>,
 }
 
 impl<'a, A: AES<'a, AES256> + AESECB> TestAES256Ecb<'a, A> {
@@ -79,13 +80,15 @@ impl<'a, A: AES<'a, AES256> + AESECB> TestAES256Ecb<'a, A> {
             step: Cell::new(TestStep::StandardEnc),
             client: OptionalCell::empty(),
             first_run: Cell::new(true),
+            key_loaded: Cell::new(false),
         }
     }
 
-    fn run_with_keywrap(&'static self, id: usize) {
-        self.aes.enable();
-        self.aes.set_mode_aesecb(true).unwrap();
-        self.key.map(|key| key[..KEY.len()].copy_from_slice(&KEY));
+    fn send_key_for_wrapping(&'static self, id: usize, wrap: bool) {
+        self.aes.set_mode_aesecb(wrap).unwrap();
+        if wrap {
+            self.key.map(|key| key[..KEY.len()].copy_from_slice(&KEY));
+        }
         assert_eq!(self.aes.set_key(AESKey::Id(id)), Ok(()));
         self.aes.start_message();
         match self
@@ -101,12 +104,88 @@ impl<'a, A: AES<'a, AES256> + AESECB> TestAES256Ecb<'a, A> {
         debug!("sent key");
     }
 
+    pub fn run_with_wrap(&'static self, id: usize) {
+        if self.first_run.get() {
+            self.aes.enable();
+            self.send_key_for_wrapping(id, true);
+            return;
+        }
+        if !self.key_loaded.get() {
+            self.aes.enable();
+            self.send_key_for_wrapping(id, false);
+            return;
+        }
+
+        let step = self.step.get();
+        let encrypting = is_encrypting(step);
+        let in_place = is_in_place(step);
+
+        if !is_second_chunk(step) {
+            self.aes.set_mode_aesecb(encrypting).unwrap();
+
+            let src = if encrypting { &PTXT } else { &CTXT_ECB };
+            self.source.map(|s| s[..src.len()].copy_from_slice(src));
+            self.aes.start_message();
+        }
+
+        prepare_in_place(step, in_place, &self.source, &self.data);
+        let (start, stop) = chunk_range(step);
+        run_crypt(self.aes, in_place, &self.source, &self.data, start, stop);
+    }
+
+    fn crypt_done_wrap(&'static self, source: Option<&'static mut [u8]>, dest: &'static mut [u8]) {
+        if self.first_run.get() {
+            self.first_run.set(false);
+            self.key.replace(dest);
+            self.key
+                .map(|k| debug!("wrapped key: {:02x?}", &k[..AES256_KEY_SIZE]));
+            self.run();
+            return;
+        }
+        if !self.key_loaded.get() {
+            self.key_loaded.set(true);
+            debug!("key loaded");
+            self.run();
+            return;
+        }
+
+        let step = self.step.get();
+        let encrypting = is_encrypting(step);
+        let in_place = is_in_place(step);
+
+        restore_source(in_place, source, &self.source);
+        self.data.replace(dest);
+
+        // ECB has no IV chaining, so we can verify after every step except
+        // ChunkEnc1/ChunkDec1 where we only have half the ciphertext yet.
+        if !is_first_chunk(step) {
+            self.key_loaded.set(false);
+            let expected = if encrypting { &CTXT_ECB } else { &PTXT };
+            self.data.map(|d| {
+                assert_eq!(
+                    &d[DATA_OFFSET..DATA_OFFSET + DATA_LEN],
+                    expected.as_ref(),
+                    "aes_test ECB failed at step {:?}",
+                    step
+                );
+            });
+            debug!("aes_test ECB passed step: {:?}", step);
+            self.aes.disable();
+        }
+
+        let next = next_step(step, self.test_decrypt);
+        self.step.set(next);
+        if next == TestStep::Done {
+            self.client.map(|c| c.done(Ok(())));
+        } else {
+            self.run();
+        }
+    }
+
     pub fn run(&'static self) {
         if let Some(id) = self.test_keywrap {
-            if self.first_run.get() {
-                self.run_with_keywrap(id);
-                return;
-            }
+            self.run_with_wrap(id);
+            return;
         }
 
         let step = self.step.get();
@@ -116,18 +195,12 @@ impl<'a, A: AES<'a, AES256> + AESECB> TestAES256Ecb<'a, A> {
         if !is_second_chunk(step) {
             self.aes.enable();
             self.aes.set_mode_aesecb(encrypting).unwrap();
-            if let Some(id) = self.test_keywrap {
-                assert_eq!(
-                    self.aes
-                        .set_key(AESKey::Wrapped(self.key.take().unwrap(), id)),
-                    Ok(())
-                );
-            } else {
-                self.key.map(|key| {
-                    key[..KEY.len()].copy_from_slice(&KEY);
-                    assert_eq!(self.aes.set_key(AESKey::PlainText(key)), Ok(()));
-                });
-            }
+
+            self.key.map(|key| {
+                key[..KEY.len()].copy_from_slice(&KEY);
+                assert_eq!(self.aes.set_key(AESKey::PlainText(key)), Ok(()));
+            });
+
             let src = if encrypting { &PTXT } else { &CTXT_ECB };
             self.source.map(|s| s[..src.len()].copy_from_slice(src));
             self.aes.start_message();
@@ -149,15 +222,11 @@ impl<A: AES<'static, AES256> + AESECB> hil::symmetric_encryption::Client<'static
     for TestAES256Ecb<'static, A>
 {
     fn crypt_done(&'static self, source: Option<&'static mut [u8]>, dest: &'static mut [u8]) {
-        if self.first_run.get() {
-            self.first_run.set(false);
-            if self.test_keywrap.is_some() {
-                self.key.replace(dest);
-                debug!("key");
-                self.run();
-                return;
-            }
+        if self.test_keywrap.is_some() {
+            self.crypt_done_wrap(source, dest);
+            return;
         }
+
         let step = self.step.get();
         let encrypting = is_encrypting(step);
         let in_place = is_in_place(step);

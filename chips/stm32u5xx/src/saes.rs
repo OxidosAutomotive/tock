@@ -14,6 +14,7 @@ use kernel::utilities::registers::{
 use kernel::utilities::StaticRef;
 
 use crate::entropy::Trng;
+use crate::saes::CR::MODE;
 
 register_structs! {
     /// Secure AES coprocessor
@@ -184,11 +185,12 @@ enum KeyID {
 
 impl KeyID {
     fn to_bits(&self) -> registers::FieldValue<u32, CR::Register> {
-        match self {
-            KeyID::DHUK => CR::KEYSEL::DHUK,
-            KeyID::BHK => CR::KEYSEL::BHK,
-            KeyID::XOR => CR::KEYSEL::XOR_DHUK_BHK,
-        }
+        // match self {
+        //     KeyID::DHUK => CR::KEYSEL::DHUK,
+        //     KeyID::BHK => CR::KEYSEL::BHK,
+        //     KeyID::XOR => CR::KEYSEL::XOR_DHUK_BHK,
+        // }
+        CR::KEYSEL::TEST
     }
 }
 
@@ -223,6 +225,7 @@ enum State {
     KeyPrep(DeferredOp),
     Crypt(CryptoContext),
     KeyWrap(KeyID),
+    Wrapping(CryptoContext),
 }
 
 pub struct Saes<'a, K: AESKeySize> {
@@ -254,6 +257,11 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
 
     fn apply_crypto_direction(&self, encrypting: bool) {
         self.encrypting.set(encrypting);
+        if self.encrypting.get() {
+            self.registers.cr.modify(CR::MODE::Encrypt);
+        } else {
+            self.registers.cr.modify(CR::MODE::KeyDerivation);
+        }
     }
 
     fn enable_interrupts(&self) {
@@ -382,17 +390,22 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
             }
             _ => {}
         }
-
         regs.cr.modify(CR::KMOD::WRAPPED);
         regs.cr.modify(key_id.to_bits());
         // POLLING FOR KEY TO BE LOADED
         while !regs.sr.is_set(SR::KEYVALID) {}
         regs.cr.modify(CR::EN::SET);
+        debug!("CR, {:02x?}", regs.cr.get());
+        debug!("SR, {:02x?}", regs.sr.get());
+        regs.icr.write(ICR::CCF::SET);
+
+        if !self.encrypting.get() {
+            regs.cr.modify(CR::MODE::Decrypt);
+        }
+        regs.cr.modify(CR::EN::SET);
 
         self.write_input(ctx);
-        debug!("CR: {:02x?}", regs.cr.get());
-        debug!("SR: {:02x?}", regs.sr.get());
-        self.state.set(State::Crypt(ctx));
+        self.state.set(State::Wrapping(ctx));
     }
 
     fn computation_complete(&self) {
@@ -426,6 +439,7 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
                 self.output.map(|output| {
                     output[offset..offset + AES_BLOCK_SIZE].copy_from_slice(&block);
                 });
+
                 ctx.curr_index += AES_BLOCK_SIZE;
 
                 // if encoding is finished, return the buffer to the client
@@ -443,12 +457,45 @@ impl<'a, K: AESKeySize> Saes<'a, K> {
                     self.write_input(ctx);
                 }
             }
+            State::Wrapping(mut ctx) => {
+                if ctx.using_dma {
+                    return;
+                }
+                // debug!("CR, {:02x?}", self.registers.cr.get());
+                // debug!("SR, {:02x?}", self.registers.sr.get());
+                let start_idx = ctx.start_index;
+                let end_idx = ctx.stop_index;
+                let offset = start_idx + ctx.curr_index;
+
+                if self.encrypting.get() {
+                    let block = self.get_output();
+                    self.output.map(|output| {
+                        output[offset..offset + AES_BLOCK_SIZE].copy_from_slice(&block);
+                    });
+                }
+                ctx.curr_index += AES_BLOCK_SIZE;
+
+                // if encoding is finished, return the buffer to the client
+                if start_idx + ctx.curr_index >= end_idx {
+                    self.registers.cr.modify(CR::EN::CLEAR + CR::KMOD::NORMAL);
+                    self.state.set(State::Idle);
+                    self.output.take().map(|output| {
+                        self.client
+                            .map(move |client| client.crypt_done(self.input.take(), output));
+                    });
+                } else {
+                    if !self.registers.cr.any_matching_bits_set(CR::EN::SET) {
+                        self.registers.cr.modify(CR::EN::SET);
+                    }
+                    self.state.set(State::Wrapping(ctx));
+                    self.write_input(ctx);
+                }
+            }
             _ => {}
         }
     }
 
     pub fn handle_interrupt(&self) {
-        debug!("interrupt");
         if self.registers.isr.is_set(ISR::CCF) {
             self.registers.icr.write(ICR::CCF::SET);
             self.computation_complete();
@@ -493,27 +540,19 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
 
     fn set_key(&self, key: AESKey) -> Result<(), ErrorCode> {
         let regs = self.registers;
-        if regs.cr.any_matching_bits_set(CR::EN::SET)
-            || regs.sr.any_matching_bits_set(SR::BUSY::SET)
-        {
+        if regs.sr.any_matching_bits_set(SR::BUSY::SET) {
             return Err(ErrorCode::BUSY);
         }
         let key = match key {
             AESKey::PlainText(key) => key,
             AESKey::Id(key_id) => {
-                // 0, 1 and 2 are valid key ids. Also, to unwrap a key, AESKey::Wrapped should be used
-                if key_id > 2 || !self.encrypting.get() {
+                // 0, 1 and 2 are valid key ids.
+                if key_id > 2 {
                     return Err(ErrorCode::INVAL);
                 }
                 let id = KeyID::from(key_id);
-                if self.encrypting.get() {
-                    self.state.set(State::KeyWrap(id));
-                }
+                self.state.set(State::KeyWrap(id));
                 return Ok(());
-            }
-            AESKey::Wrapped(key, id) => {
-                regs.cr.modify(CR::MODE::Decrypt);
-                key
             }
         };
 
@@ -577,9 +616,6 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Saes<'
         &'static mut [u8],
     )> {
         let state = self.state.get();
-
-        debug!("CR: {:02x?}", self.registers.cr.get());
-        debug!("SR: {:02x?}", self.registers.sr.get());
 
         //  Hardware busy check
         if self.output.is_some() || self.registers.sr.any_matching_bits_set(SR::BUSY::SET) {

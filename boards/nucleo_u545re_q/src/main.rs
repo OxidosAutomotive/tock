@@ -288,7 +288,7 @@ unsafe fn start() -> (
             aes_cbc_src,
             aes_cbc_dst,
             true,
-            Some(0)
+            Some(2)
         )
     );
     saes.set_client(aes_cbc_test);
