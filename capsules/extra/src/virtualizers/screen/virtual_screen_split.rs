@@ -8,6 +8,7 @@
 //! write that portion of the screen but cannot control the general screen
 //! settings (e.g., brightness).
 
+use capsules_core::virtualizers::selection_policy::{RoundRobinPolicy, SelectionPolicy};
 use core::cell::Cell;
 use kernel::collections::list::{List, ListLink, ListNode};
 use kernel::deferred_call::{DeferredCall, DeferredCallClient};
@@ -52,9 +53,13 @@ enum ScreenSplitState {
 
 /// An implementation of [`Screen`](kernel::hil::screen::Screen) for a subregion
 /// of the actual screen.
-pub struct ScreenSplitUser<'a, S: hil::screen::Screen<'a>> {
+pub struct ScreenSplitUser<
+    'a,
+    S: hil::screen::Screen<'a>,
+    SP: SelectionPolicy<&'a Self> = RoundRobinPolicy,
+> {
     /// The shared screen manager that serializes screen operations.
-    mux: &'a ScreenSplitMux<'a, S>,
+    mux: &'a ScreenSplitMux<'a, S, SP>,
     /// The frame within the entire screen this split section has access to.
     frame: Frame,
     /// The frame inside of the split that is active. Defaults to the entire
@@ -67,12 +72,12 @@ pub struct ScreenSplitUser<'a, S: hil::screen::Screen<'a>> {
     /// Screen client.
     client: OptionalCell<&'a dyn hil::screen::ScreenClient>,
     /// Track the list of screen split users.
-    next: ListLink<'a, ScreenSplitUser<'a, S>>,
+    next: ListLink<'a, ScreenSplitUser<'a, S, SP>>,
 }
 
-impl<'a, S: hil::screen::Screen<'a>> ScreenSplitUser<'a, S> {
+impl<'a, S: hil::screen::Screen<'a>, SP: SelectionPolicy<&'a Self>> ScreenSplitUser<'a, S, SP> {
     pub fn new(
-        mux: &'a ScreenSplitMux<'a, S>,
+        mux: &'a ScreenSplitMux<'a, S, SP>,
         x: usize,
         y: usize,
         width: usize,
@@ -106,15 +111,17 @@ impl<'a, S: hil::screen::Screen<'a>> ScreenSplitUser<'a, S> {
     }
 }
 
-impl<'a, S: hil::screen::Screen<'a>> ListNode<'a, ScreenSplitUser<'a, S>>
-    for ScreenSplitUser<'a, S>
+impl<'a, S: hil::screen::Screen<'a>, SP: SelectionPolicy<&'a Self>>
+    ListNode<'a, ScreenSplitUser<'a, S, SP>> for ScreenSplitUser<'a, S, SP>
 {
-    fn next(&'a self) -> &'a ListLink<'a, ScreenSplitUser<'a, S>> {
+    fn next(&'a self) -> &'a ListLink<'a, ScreenSplitUser<'a, S, SP>> {
         &self.next
     }
 }
 
-impl<'a, S: hil::screen::Screen<'a>> hil::screen::Screen<'a> for ScreenSplitUser<'a, S> {
+impl<'a, S: hil::screen::Screen<'a>, SP: SelectionPolicy<&'a Self>> hil::screen::Screen<'a>
+    for ScreenSplitUser<'a, S, SP>
+{
     fn set_client(&self, client: &'a dyn hil::screen::ScreenClient) {
         self.client.set(client);
     }
@@ -186,7 +193,9 @@ impl<'a, S: hil::screen::Screen<'a>> hil::screen::Screen<'a> for ScreenSplitUser
     }
 }
 
-impl<'a, S: hil::screen::Screen<'a>> hil::screen::ScreenClient for ScreenSplitUser<'a, S> {
+impl<'a, S: hil::screen::Screen<'a>, SP: SelectionPolicy<&'a Self>> hil::screen::ScreenClient
+    for ScreenSplitUser<'a, S, SP>
+{
     fn command_complete(&self, r: Result<(), ErrorCode>) {
         self.pending.take();
 
@@ -214,15 +223,21 @@ impl<'a, S: hil::screen::Screen<'a>> hil::screen::ScreenClient for ScreenSplitUs
 ///
 /// This enables two users (e.g., the kernel and all userspace apps) to share
 /// a single physical screen. Each split screen is assigned a fixed region.
-pub struct ScreenSplitMux<'a, S: hil::screen::Screen<'a>> {
+pub struct ScreenSplitMux<
+    'a,
+    S: hil::screen::Screen<'a>,
+    SP: SelectionPolicy<&'a ScreenSplitUser<'a, S, SP>> = RoundRobinPolicy,
+> {
     /// Underlying screen driver to use.
     screen: &'a S,
 
     /// List of all users of the screen with their own splits.
-    splits: List<'a, ScreenSplitUser<'a, S>>,
+    splits: List<'a, ScreenSplitUser<'a, S, SP>>,
 
     /// What is using the split screen and what state this mux is in.
-    current_user: OptionalCell<(&'a ScreenSplitUser<'a, S>, ScreenSplitState)>,
+    current_user: OptionalCell<(&'a ScreenSplitUser<'a, S, SP>, ScreenSplitState)>,
+
+    selection_policy: SP,
 
     /// Simulate interrupt callbacks for setting the frame.
     deferred_call: DeferredCall,
@@ -234,6 +249,21 @@ impl<'a, S: hil::screen::Screen<'a>> ScreenSplitMux<'a, S> {
             screen,
             splits: List::new(),
             current_user: OptionalCell::empty(),
+            selection_policy: RoundRobinPolicy::default(),
+            deferred_call: DeferredCall::new(),
+        }
+    }
+}
+
+impl<'a, S: hil::screen::Screen<'a>, SP: SelectionPolicy<&'a ScreenSplitUser<'a, S, SP>>>
+    ScreenSplitMux<'a, S, SP>
+{
+    pub fn new_with_policy(screen: &'a S, selection_policy: SP) -> Self {
+        Self {
+            screen,
+            splits: List::new(),
+            current_user: OptionalCell::empty(),
+            selection_policy,
             deferred_call: DeferredCall::new(),
         }
     }
@@ -246,7 +276,10 @@ impl<'a, S: hil::screen::Screen<'a>> ScreenSplitMux<'a, S> {
         }
 
         // Check if there is a split that has work to do.
-        if let Some(split) = self.splits.iter().find(|split| split.pending.is_some()) {
+        if let Some(split) = self
+            .selection_policy
+            .select(self.splits.iter(), |split| split.pending.is_some())
+        {
             // We have a split that has requested an operation.
             if let Some(operation) = split.pending.take() {
                 self.call_screen(split, operation)
@@ -260,7 +293,7 @@ impl<'a, S: hil::screen::Screen<'a>> ScreenSplitMux<'a, S> {
 
     fn call_screen(
         &self,
-        split: &'a ScreenSplitUser<'a, S>,
+        split: &'a ScreenSplitUser<'a, S, SP>,
         operation: ScreenSplitOperation,
     ) -> Result<(), ErrorCode> {
         match operation {
@@ -319,7 +352,9 @@ impl<'a, S: hil::screen::Screen<'a>> ScreenSplitMux<'a, S> {
     }
 }
 
-impl<'a, S: hil::screen::Screen<'a>> hil::screen::ScreenClient for ScreenSplitMux<'a, S> {
+impl<'a, S: hil::screen::Screen<'a>, SP: SelectionPolicy<&'a ScreenSplitUser<'a, S, SP>>>
+    hil::screen::ScreenClient for ScreenSplitMux<'a, S, SP>
+{
     fn command_complete(&self, _r: Result<(), ErrorCode>) {
         if let Some((current_user, ScreenSplitState::WriteSetFrame(subslice, continue_write))) =
             self.current_user.take()
@@ -350,7 +385,9 @@ impl<'a, S: hil::screen::Screen<'a>> hil::screen::ScreenClient for ScreenSplitMu
     }
 }
 
-impl<'a, S: hil::screen::Screen<'a>> DeferredCallClient for ScreenSplitMux<'a, S> {
+impl<'a, S: hil::screen::Screen<'a>, SP: SelectionPolicy<&'a ScreenSplitUser<'a, S, SP>>>
+    DeferredCallClient for ScreenSplitMux<'a, S, SP>
+{
     fn handle_deferred_call(&self) {
         // All we have to do is trigger the set frame callback.
         if let Some((current_user, _state)) = self.current_user.take() {

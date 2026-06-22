@@ -490,7 +490,7 @@ impl<'a, SP: SelectionPolicy<&'a Self>> uart::Transmit<'a> for UartDevice<'a, SP
     }
 }
 
-impl<'a, P: SelectionPolicy<&'a Self>> uart::Receive<'a> for UartDevice<'a, P> {
+impl<'a, SP: SelectionPolicy<&'a Self>> uart::Receive<'a> for UartDevice<'a, SP> {
     fn set_receive_client(&self, client: &'a dyn uart::ReceiveClient) {
         self.rx_client.set(client);
     }
