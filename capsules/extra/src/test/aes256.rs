@@ -101,7 +101,6 @@ impl<'a, A: AES<'a, AES256> + AESECB> TestAES256Ecb<'a, A> {
                 panic!("crypt() returned error: {:?}", result);
             }
         }
-        debug!("sent key");
     }
 
     pub fn run_with_wrap(&'static self, id: usize) {
@@ -137,14 +136,12 @@ impl<'a, A: AES<'a, AES256> + AESECB> TestAES256Ecb<'a, A> {
         if self.first_run.get() {
             self.first_run.set(false);
             self.key.replace(dest);
-            self.key
-                .map(|k| debug!("wrapped key: {:02x?}", &k[..AES256_KEY_SIZE]));
             self.run();
             return;
         }
         if !self.key_loaded.get() {
             self.key_loaded.set(true);
-            debug!("key loaded");
+            self.key.replace(dest);
             self.run();
             return;
         }
@@ -271,11 +268,14 @@ pub struct TestAES256Cbc<'a, A: 'a> {
     source: TakeCell<'static, [u8]>,
     data: TakeCell<'static, [u8]>,
     test_decrypt: bool,
+    test_keywrap: Option<usize>,
     step: Cell<TestStep>,
     client: OptionalCell<&'static dyn CapsuleTestClient>,
+    first_run: Cell<bool>,
+    key_loaded: Cell<bool>,
 }
 
-impl<'a, A: AES<'a, AES256> + AESCBC> TestAES256Cbc<'a, A> {
+impl<'a, A: AES<'a, AES256> + AESCBC + AESECB> TestAES256Cbc<'a, A> {
     pub fn new(
         aes: &'a A,
         key: &'a mut [u8],
@@ -283,6 +283,7 @@ impl<'a, A: AES<'a, AES256> + AESCBC> TestAES256Cbc<'a, A> {
         source: &'static mut [u8],
         data: &'static mut [u8],
         test_decrypt: bool,
+        test_keywrap: Option<usize>,
     ) -> Self {
         TestAES256Cbc {
             aes,
@@ -291,12 +292,119 @@ impl<'a, A: AES<'a, AES256> + AESCBC> TestAES256Cbc<'a, A> {
             source: TakeCell::new(source),
             data: TakeCell::new(data),
             test_decrypt,
+            test_keywrap,
             step: Cell::new(TestStep::StandardEnc),
             client: OptionalCell::empty(),
+            first_run: Cell::new(true),
+            key_loaded: Cell::new(false),
         }
     }
 
-    pub fn run(&self) {
+    fn send_key_for_wrapping(&'static self, id: usize, wrap: bool) {
+        // Use ECB specifically for key wrapping
+        self.aes.set_mode_aesecb(wrap).unwrap();
+        if wrap {
+            self.key.map(|key| key[..KEY.len()].copy_from_slice(&KEY));
+        }
+        assert_eq!(self.aes.set_key(AESKey::Id(id)), Ok(()));
+        self.aes.start_message();
+        match self
+            .aes
+            .crypt(None, self.key.take().unwrap(), 0, AES256_KEY_SIZE)
+        {
+            None => {}
+            Some((result, _, dest_back)) => {
+                self.key.put(Some(dest_back));
+                panic!("crypt() returned error: {:?}", result);
+            }
+        }
+    }
+
+    pub fn run_with_wrap(&'static self, id: usize) {
+        if self.first_run.get() {
+            self.aes.enable();
+            self.send_key_for_wrapping(id, true);
+            return;
+        }
+        if !self.key_loaded.get() {
+            self.aes.enable();
+            self.send_key_for_wrapping(id, false);
+            return;
+        }
+
+        let step = self.step.get();
+        let encrypting = is_encrypting(step);
+        let in_place = is_in_place(step);
+
+        if !is_second_chunk(step) {
+            self.aes.set_mode_aescbc(encrypting).unwrap();
+
+            self.iv.map(|iv| {
+                iv[..IV_CBC.len()].copy_from_slice(&IV_CBC);
+                assert_eq!(self.aes.set_iv(iv), Ok(()));
+            });
+
+            let src = if encrypting { &PTXT } else { &CTXT_CBC };
+            self.source.map(|s| s[..src.len()].copy_from_slice(src));
+            self.aes.start_message();
+        }
+
+        prepare_in_place(step, in_place, &self.source, &self.data);
+        let (start, stop) = chunk_range(step);
+        run_crypt(self.aes, in_place, &self.source, &self.data, start, stop);
+    }
+
+    fn crypt_done_wrap(&'static self, source: Option<&'static mut [u8]>, dest: &'static mut [u8]) {
+        if self.first_run.get() {
+            self.first_run.set(false);
+            self.key.replace(dest);
+            self.run();
+            return;
+        }
+        if !self.key_loaded.get() {
+            self.key_loaded.set(true);
+            self.key.replace(dest);
+            self.run();
+            return;
+        }
+
+        let step = self.step.get();
+        let encrypting = is_encrypting(step);
+        let in_place = is_in_place(step);
+
+        restore_source(in_place, source, &self.source);
+        self.data.replace(dest);
+
+        if !is_first_chunk(step) {
+            self.key_loaded.set(false);
+            let expected = if encrypting { &CTXT_CBC } else { &PTXT };
+            self.data.map(|d| {
+                assert_eq!(
+                    &d[DATA_OFFSET..DATA_OFFSET + DATA_LEN],
+                    expected.as_ref(),
+                    "aes_test CBC failed at step {:?}",
+                    step
+                );
+            });
+            debug!("aes_test CBC passed step: {:?}", step);
+            self.aes.disable();
+        }
+
+        let next = next_step(step, self.test_decrypt);
+        self.step.set(next);
+        if next == TestStep::Done {
+            self.client.map(|c| c.done(Ok(())));
+        } else {
+            self.run();
+        }
+    }
+
+    pub fn run(&'static self) {
+        if let Some(id) = self.test_keywrap {
+            self.run_with_wrap(id);
+            return;
+        }
+
         let step = self.step.get();
         let encrypting = is_encrypting(step);
         let in_place = is_in_place(step);
@@ -324,16 +432,21 @@ impl<'a, A: AES<'a, AES256> + AESCBC> TestAES256Cbc<'a, A> {
     }
 }
 
-impl<'a, A: AES<'a, AES256> + AESCBC> CapsuleTest for TestAES256Cbc<'a, A> {
+impl<'a, A: AES<'a, AES256> + AESCBC + AESECB> CapsuleTest for TestAES256Cbc<'a, A> {
     fn set_client(&self, client: &'static dyn CapsuleTestClient) {
         self.client.set(client);
     }
 }
 
-impl<'a, A: AES<'a, AES256> + AESCBC> hil::symmetric_encryption::Client<'a>
-    for TestAES256Cbc<'a, A>
+impl<A: AES<'static, AES256> + AESCBC + AESECB> hil::symmetric_encryption::Client<'static>
+    for TestAES256Cbc<'static, A>
 {
-    fn crypt_done(&'a self, source: Option<&'static mut [u8]>, dest: &'static mut [u8]) {
+    fn crypt_done(&'static self, source: Option<&'static mut [u8]>, dest: &'static mut [u8]) {
+        if self.test_keywrap.is_some() {
+            self.crypt_done_wrap(source, dest);
+            return;
+        }
+
         let step = self.step.get();
         let encrypting = is_encrypting(step);
         let in_place = is_in_place(step);
@@ -376,11 +489,14 @@ pub struct TestAES256Ctr<'a, A: 'a> {
     source: TakeCell<'static, [u8]>,
     data: TakeCell<'static, [u8]>,
     test_decrypt: bool,
+    test_keywrap: Option<usize>,
     step: Cell<TestStep>,
     client: OptionalCell<&'static dyn CapsuleTestClient>,
+    first_run: Cell<bool>,
+    key_loaded: Cell<bool>,
 }
 
-impl<'a, A: AES<'a, AES256> + AESCtr> TestAES256Ctr<'a, A> {
+impl<'a, A: AES<'a, AES256> + AESCtr + AESECB> TestAES256Ctr<'a, A> {
     pub fn new(
         aes: &'a A,
         key: &'a mut [u8],
@@ -388,6 +504,7 @@ impl<'a, A: AES<'a, AES256> + AESCtr> TestAES256Ctr<'a, A> {
         source: &'static mut [u8],
         data: &'static mut [u8],
         test_decrypt: bool,
+        test_keywrap: Option<usize>,
     ) -> Self {
         TestAES256Ctr {
             aes,
@@ -396,12 +513,126 @@ impl<'a, A: AES<'a, AES256> + AESCtr> TestAES256Ctr<'a, A> {
             source: TakeCell::new(source),
             data: TakeCell::new(data),
             test_decrypt,
+            test_keywrap,
             step: Cell::new(TestStep::StandardEnc),
             client: OptionalCell::empty(),
+            first_run: Cell::new(true),
+            key_loaded: Cell::new(false),
         }
     }
 
-    pub fn run(&self) {
+    fn send_key_for_wrapping(&'static self, id: usize, wrap: bool) {
+        // Use ECB specifically for key wrapping
+        self.aes.set_mode_aesecb(wrap).unwrap();
+        if wrap {
+            self.key.map(|key| key[..KEY.len()].copy_from_slice(&KEY));
+        }
+        assert_eq!(self.aes.set_key(AESKey::Id(id)), Ok(()));
+        self.aes.start_message();
+        match self
+            .aes
+            .crypt(None, self.key.take().unwrap(), 0, AES256_KEY_SIZE)
+        {
+            None => {}
+            Some((result, _, dest_back)) => {
+                self.key.put(Some(dest_back));
+                panic!("crypt() returned error: {:?}", result);
+            }
+        }
+    }
+
+    pub fn run_with_wrap(&'static self, id: usize) {
+        if self.first_run.get() {
+            self.aes.enable();
+            self.send_key_for_wrapping(id, true);
+            return;
+        }
+        if !self.key_loaded.get() {
+            self.aes.enable();
+            self.send_key_for_wrapping(id, false);
+            return;
+        }
+
+        let step = self.step.get();
+        let encrypting = is_encrypting(step);
+        let in_place = is_in_place(step);
+
+        if !is_second_chunk(step) {
+            self.aes.set_mode_aesctr(encrypting).unwrap();
+
+            self.iv.map(|iv| {
+                iv[..IV_CTR.len()].copy_from_slice(&IV_CTR);
+                assert_eq!(self.aes.set_iv(iv), Ok(()));
+            });
+
+            let src = if encrypting { &PTXT } else { &CTXT_CTR };
+            self.source.map(|s| s[..src.len()].copy_from_slice(src));
+            self.aes.start_message();
+        }
+
+        prepare_in_place(step, in_place, &self.source, &self.data);
+        let (start, stop) = chunk_range(step);
+        run_crypt(self.aes, in_place, &self.source, &self.data, start, stop);
+    }
+
+    fn crypt_done_wrap(&'static self, source: Option<&'static mut [u8]>, dest: &'static mut [u8]) {
+        if self.first_run.get() {
+            self.first_run.set(false);
+            self.key.replace(dest);
+            self.run();
+            return;
+        }
+        if !self.key_loaded.get() {
+            self.key_loaded.set(true);
+            self.key.replace(dest);
+            self.run();
+            return;
+        }
+
+        let step = self.step.get();
+        let encrypting = is_encrypting(step);
+        let in_place = is_in_place(step);
+
+        restore_source(in_place, source, &self.source);
+        self.data.replace(dest);
+
+        if !is_first_chunk(step) {
+            self.key_loaded.set(false);
+            let expected = if encrypting { &CTXT_CTR } else { &PTXT };
+            self.data.map(|d| {
+                assert_eq!(
+                    &d[DATA_OFFSET..DATA_OFFSET + DATA_LEN],
+                    expected.as_ref(),
+                    "aes_test CTR failed at step {:?}",
+                    step
+                );
+                // Verify guard region was not touched
+                assert_eq!(
+                    d[..DATA_OFFSET],
+                    [0u8; DATA_OFFSET],
+                    "aes_test CTR: guard region corrupted at step {:?}",
+                    step
+                );
+            });
+            debug!("aes_test CTR passed step: {:?}", step);
+            self.aes.disable();
+        }
+
+        let next = next_step(step, self.test_decrypt);
+        self.step.set(next);
+        if next == TestStep::Done {
+            self.client.map(|c| c.done(Ok(())));
+        } else {
+            self.run();
+        }
+    }
+
+    pub fn run(&'static self) {
+        if let Some(id) = self.test_keywrap {
+            self.run_with_wrap(id);
+            return;
+        }
+
         let step = self.step.get();
         let encrypting = is_encrypting(step);
         let in_place = is_in_place(step);
@@ -430,16 +661,21 @@ impl<'a, A: AES<'a, AES256> + AESCtr> TestAES256Ctr<'a, A> {
     }
 }
 
-impl<'a, A: AES<'a, AES256> + AESCtr> CapsuleTest for TestAES256Ctr<'a, A> {
+impl<'a, A: AES<'a, AES256> + AESCtr + AESECB> CapsuleTest for TestAES256Ctr<'a, A> {
     fn set_client(&self, client: &'static dyn CapsuleTestClient) {
         self.client.set(client);
     }
 }
 
-impl<'a, A: AES<'a, AES256> + AESCtr> hil::symmetric_encryption::Client<'a>
-    for TestAES256Ctr<'a, A>
+impl<A: AES<'static, AES256> + AESCtr + AESECB> hil::symmetric_encryption::Client<'static>
+    for TestAES256Ctr<'static, A>
 {
-    fn crypt_done(&'a self, source: Option<&'static mut [u8]>, dest: &'static mut [u8]) {
+    fn crypt_done(&'static self, source: Option<&'static mut [u8]>, dest: &'static mut [u8]) {
+        if self.test_keywrap.is_some() {
+            self.crypt_done_wrap(source, dest);
+            return;
+        }
+
         let step = self.step.get();
         let encrypting = is_encrypting(step);
         let in_place = is_in_place(step);
@@ -477,7 +713,6 @@ impl<'a, A: AES<'a, AES256> + AESCtr> hil::symmetric_encryption::Client<'a>
         }
     }
 }
-
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------

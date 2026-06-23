@@ -10,6 +10,7 @@ use capsules_core::test::capsule_test::CapsuleTest;
 use kernel::capabilities;
 use kernel::component::Component;
 use kernel::debug::PanicResources;
+use kernel::deferred_call::DeferredCallClient;
 use kernel::hil::symmetric_encryption::{AES, AES256};
 use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::utilities::single_thread_value::SingleThreadValue;
@@ -272,23 +273,25 @@ unsafe fn start() -> (
 
     aes.set_client(aes_driver);
 
+    saes.register();
+
     let aes_cbc_key = static_init!([u8; 32], [0; 32]);
-    // let aes_cbc_iv = static_init!([u8; 16], [0; 16]);
+    let aes_cbc_iv = static_init!([u8; 16], [0; 16]);
     let aes_cbc_src = static_init!([u8; 64], [0; 64]);
     let aes_cbc_dst = static_init!([u8; 96], [0; 96]);
     let aes_cbc_test = static_init!(
-        capsules_extra::test::aes256::TestAES256Ecb<
+        capsules_extra::test::aes256::TestAES256Cbc<
             'static,
             stm32u545::saes::Saes<'static, AES256>,
         >,
-        capsules_extra::test::aes256::TestAES256Ecb::new(
+        capsules_extra::test::aes256::TestAES256Cbc::new(
             saes,
             aes_cbc_key,
-            // aes_cbc_iv,
+            aes_cbc_iv,
             aes_cbc_src,
             aes_cbc_dst,
             true,
-            Some(2)
+            Some(0)
         )
     );
     saes.set_client(aes_cbc_test);
