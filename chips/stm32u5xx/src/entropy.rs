@@ -111,7 +111,7 @@ pub struct Trng<'a> {
     deferred_call: DeferredCall,
 }
 
-impl<'a> Trng<'a> {
+impl Trng<'_> {
     pub fn new(base: StaticRef<RngRegisters>) -> Self {
         Self {
             registers: base,

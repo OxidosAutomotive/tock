@@ -6,7 +6,6 @@
 #![no_std]
 #![no_main]
 
-use capsules_core::test::capsule_test::CapsuleTest;
 use kernel::capabilities;
 use kernel::component::Component;
 use kernel::debug::PanicResources;

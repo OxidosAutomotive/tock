@@ -1,3 +1,7 @@
+// Licensed under the Apache License, Version 2.0 or the MIT License.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright OxidOS Automotive 2026.
+
 use core::cell::Cell;
 use core::marker::PhantomData;
 use kernel::debug;
@@ -185,7 +189,7 @@ enum KeyID {
 }
 
 impl KeyID {
-    fn to_bits(&self) -> registers::FieldValue<u32, CR::Register> {
+    fn to_bits(self) -> registers::FieldValue<u32, CR::Register> {
         match self {
             KeyID::DHUK => CR::KEYSEL::DHUK,
             KeyID::BHK => CR::KEYSEL::BHK,
