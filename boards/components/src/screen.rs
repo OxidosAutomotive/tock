@@ -30,9 +30,12 @@
 //!         .finalize(components::screen_component_static!(40960));
 //! ```
 
+use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_extra::screen::screen::Screen;
 use capsules_extra::screen::screen_shared::ScreenShared;
 use capsules_extra::virtualizers::screen::virtual_screen_split;
+use capsules_extra::virtualizers::screen::virtual_screen_split::ScreenSplitUser;
 use core::mem::MaybeUninit;
 use kernel::capabilities;
 use kernel::component::Component;
@@ -41,6 +44,15 @@ use kernel::hil;
 
 #[macro_export]
 macro_rules! screen_split_mux_component_static {
+    ($S:ty, $SP:ty $(,)?) => {{
+        kernel::static_buf!(
+            capsules_extra::virtualizers::screen::virtual_screen_split::ScreenSplitMux<
+                'static,
+                $S,
+                $SP,
+            >
+        )
+    };};
     ($S:ty $(,)?) => {{
         kernel::static_buf!(
             capsules_extra::virtualizers::screen::virtual_screen_split::ScreenSplitMux<'static, $S>
@@ -50,6 +62,15 @@ macro_rules! screen_split_mux_component_static {
 
 #[macro_export]
 macro_rules! screen_split_user_component_static {
+    ($S:ty, $SP:ty $(,)?) => {{
+        kernel::static_buf!(
+            capsules_extra::virtualizers::screen::virtual_screen_split::ScreenSplitUser<
+                'static,
+                $S,
+                $SP,
+            >
+        )
+    };};
     ($S:ty $(,)?) => {{
         kernel::static_buf!(
             capsules_extra::virtualizers::screen::virtual_screen_split::ScreenSplitUser<
@@ -60,24 +81,52 @@ macro_rules! screen_split_user_component_static {
     };};
 }
 
-pub type ScreenSplitMuxComponentType<S> = virtual_screen_split::ScreenSplitMux<'static, S>;
+pub type ScreenSplitMuxComponentType<S, SP> = virtual_screen_split::ScreenSplitMux<'static, S, SP>;
 
-pub struct ScreenSplitMuxComponent<S: hil::screen::Screen<'static> + 'static> {
+pub struct ScreenSplitMuxComponent<
+    S: hil::screen::Screen<'static> + 'static,
+    SP: 'static + SelectionPolicy<&'static ScreenSplitUser<'static, S, SP>> = RoundRobinPolicy,
+> {
     screen: &'static S,
+    selection_policy: SP,
 }
 
 impl<S: hil::screen::Screen<'static>> ScreenSplitMuxComponent<S> {
     pub fn new(screen: &'static S) -> Self {
-        Self { screen }
+        Self {
+            screen,
+            selection_policy: RoundRobinPolicy::default(),
+        }
     }
 }
 
-impl<S: hil::screen::Screen<'static> + 'static> Component for ScreenSplitMuxComponent<S> {
-    type StaticInput = &'static mut MaybeUninit<virtual_screen_split::ScreenSplitMux<'static, S>>;
-    type Output = &'static virtual_screen_split::ScreenSplitMux<'static, S>;
+impl<
+        S: hil::screen::Screen<'static>,
+        SP: 'static + SelectionPolicy<&'static ScreenSplitUser<'static, S, SP>>,
+    > ScreenSplitMuxComponent<S, SP>
+{
+    pub fn new_with_policy(screen: &'static S, policy: SP) -> Self {
+        Self {
+            screen,
+            selection_policy: policy,
+        }
+    }
+}
+
+impl<
+        S: hil::screen::Screen<'static> + 'static,
+        SP: 'static + SelectionPolicy<&'static ScreenSplitUser<'static, S, SP>>,
+    > Component for ScreenSplitMuxComponent<S, SP>
+{
+    type StaticInput =
+        &'static mut MaybeUninit<virtual_screen_split::ScreenSplitMux<'static, S, SP>>;
+    type Output = &'static virtual_screen_split::ScreenSplitMux<'static, S, SP>;
 
     fn finalize(self, static_input: Self::StaticInput) -> Self::Output {
-        let mux = static_input.write(virtual_screen_split::ScreenSplitMux::new(self.screen));
+        let mux = static_input.write(virtual_screen_split::ScreenSplitMux::new_with_policy(
+            self.screen,
+            self.selection_policy,
+        ));
 
         kernel::hil::screen::Screen::set_client(self.screen, mux);
         kernel::deferred_call::DeferredCallClient::register(mux);
@@ -86,19 +135,27 @@ impl<S: hil::screen::Screen<'static> + 'static> Component for ScreenSplitMuxComp
     }
 }
 
-pub type ScreenSplitUserComponentType<S> = virtual_screen_split::ScreenSplitUser<'static, S>;
+pub type ScreenSplitUserComponentType<S, SP> =
+    virtual_screen_split::ScreenSplitUser<'static, S, SP>;
 
-pub struct ScreenSplitUserComponent<S: hil::screen::Screen<'static> + 'static> {
-    mux: &'static virtual_screen_split::ScreenSplitMux<'static, S>,
+pub struct ScreenSplitUserComponent<
+    S: hil::screen::Screen<'static> + 'static,
+    SP: 'static + SelectionPolicy<&'static ScreenSplitUser<'static, S, SP>>,
+> {
+    mux: &'static virtual_screen_split::ScreenSplitMux<'static, S, SP>,
     x: usize,
     y: usize,
     width: usize,
     height: usize,
 }
 
-impl<S: hil::screen::Screen<'static>> ScreenSplitUserComponent<S> {
+impl<
+        S: hil::screen::Screen<'static>,
+        SP: 'static + SelectionPolicy<&'static ScreenSplitUser<'static, S, SP>>,
+    > ScreenSplitUserComponent<S, SP>
+{
     pub fn new(
-        mux: &'static virtual_screen_split::ScreenSplitMux<'static, S>,
+        mux: &'static virtual_screen_split::ScreenSplitMux<'static, S, SP>,
         x: usize,
         y: usize,
         width: usize,
@@ -114,9 +171,14 @@ impl<S: hil::screen::Screen<'static>> ScreenSplitUserComponent<S> {
     }
 }
 
-impl<S: hil::screen::Screen<'static> + 'static> Component for ScreenSplitUserComponent<S> {
-    type StaticInput = &'static mut MaybeUninit<virtual_screen_split::ScreenSplitUser<'static, S>>;
-    type Output = &'static virtual_screen_split::ScreenSplitUser<'static, S>;
+impl<
+        S: hil::screen::Screen<'static> + 'static,
+        SP: 'static + SelectionPolicy<&'static ScreenSplitUser<'static, S, SP>>,
+    > Component for ScreenSplitUserComponent<S, SP>
+{
+    type StaticInput =
+        &'static mut MaybeUninit<virtual_screen_split::ScreenSplitUser<'static, S, SP>>;
+    type Output = &'static virtual_screen_split::ScreenSplitUser<'static, S, SP>;
 
     fn finalize(self, static_input: Self::StaticInput) -> Self::Output {
         let split = static_input.write(virtual_screen_split::ScreenSplitUser::new(

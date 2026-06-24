@@ -33,7 +33,8 @@
 //! ));
 //! ```
 
-use capsules_core::virtualizers::virtual_aes_ccm::MuxAES128CCM;
+use capsules_core::virtualizers::selection_policy::{RoundRobinPolicy, SelectionPolicy};
+use capsules_core::virtualizers::virtual_aes_ccm::{MuxAES128CCM, VirtualAES128CCM};
 use capsules_extra::ieee802154::device::MacDevice;
 use capsules_extra::ieee802154::mac::{AwakeMac, Mac};
 use core::mem::MaybeUninit;
@@ -49,31 +50,61 @@ pub const CRYPT_SIZE: usize = 3 * symmetric_encryption::AES128_BLOCK_SIZE + radi
 
 #[macro_export]
 macro_rules! mux_aes128ccm_component_static {
+    ($A:ty, $SP:ty $(,)?) => {{
+        kernel::static_buf!(
+            capsules_core::virtualizers::virtual_aes_ccm::MuxAES128CCM<'static, $A, $SP>
+        )
+    };};
     ($A:ty $(,)?) => {{
         kernel::static_buf!(capsules_core::virtualizers::virtual_aes_ccm::MuxAES128CCM<'static, $A>)
     };};
 }
 
-pub type MuxAes128ccmComponentType<A> = MuxAES128CCM<'static, A>;
+pub type MuxAes128ccmComponentType<A, SP> = MuxAES128CCM<'static, A, SP>;
 
-pub struct MuxAes128ccmComponent<A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB> {
+pub struct MuxAes128ccmComponent<
+    A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB,
+    SP: 'static + SelectionPolicy<&'static VirtualAES128CCM<'static, A, SP>> = RoundRobinPolicy,
+> {
     aes: &'static A,
+    selection_policy: SP,
 }
 
 impl<A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB> MuxAes128ccmComponent<A> {
     pub fn new(aes: &'static A) -> Self {
-        Self { aes }
+        Self {
+            aes,
+            selection_policy: RoundRobinPolicy::default(),
+        }
     }
 }
 
-impl<A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB> Component
-    for MuxAes128ccmComponent<A>
+impl<
+        A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB,
+        SP: 'static + SelectionPolicy<&'static VirtualAES128CCM<'static, A, SP>>,
+    > MuxAes128ccmComponent<A, SP>
 {
-    type StaticInput = &'static mut MaybeUninit<MuxAES128CCM<'static, A>>;
-    type Output = &'static MuxAES128CCM<'static, A>;
+    pub fn new_with_policy(aes: &'static A, policy: SP) -> Self {
+        Self {
+            aes,
+            selection_policy: policy,
+        }
+    }
+}
+
+impl<
+        A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB,
+        SP: 'static + SelectionPolicy<&'static VirtualAES128CCM<'static, A, SP>>,
+    > Component for MuxAes128ccmComponent<A, SP>
+{
+    type StaticInput = &'static mut MaybeUninit<MuxAES128CCM<'static, A, SP>>;
+    type Output = &'static MuxAES128CCM<'static, A, SP>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
-        let aes_mux = static_buffer.write(MuxAES128CCM::new(self.aes));
+        let aes_mux = static_buffer.write(MuxAES128CCM::new_with_policy(
+            self.aes,
+            self.selection_policy,
+        ));
         kernel::deferred_call::DeferredCallClient::register(aes_mux);
         self.aes.set_client(aes_mux);
 
@@ -84,16 +115,16 @@ impl<A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB> Component
 // Setup static space for the objects.
 #[macro_export]
 macro_rules! ieee802154_component_static {
-    ($R:ty, $A:ty $(,)?) => {{
+    ($R:ty, $A:ty, $SP:ty $(,)?) => {{
         let virtual_aes = kernel::static_buf!(
-            capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, $A>
+            capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, $A, $SP>
         );
         let awake_mac = kernel::static_buf!(capsules_extra::ieee802154::mac::AwakeMac<'static, $R>);
         let framer = kernel::static_buf!(
             capsules_extra::ieee802154::framer::Framer<
                 'static,
                 capsules_extra::ieee802154::mac::AwakeMac<'static, $R>,
-                capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, $A>,
+                capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, $A, $SP>,
             >
         );
 
@@ -103,7 +134,11 @@ macro_rules! ieee802154_component_static {
                 capsules_extra::ieee802154::framer::Framer<
                     'static,
                     capsules_extra::ieee802154::mac::AwakeMac<'static, $R>,
-                    capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, $A>,
+                    capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<
+                        'static,
+                        $A,
+                        $SP,
+                    >,
                 >,
             >
         );
@@ -113,7 +148,11 @@ macro_rules! ieee802154_component_static {
                 capsules_extra::ieee802154::framer::Framer<
                     'static,
                     capsules_extra::ieee802154::mac::AwakeMac<'static, $R>,
-                    capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, $A>,
+                    capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<
+                        'static,
+                        $A,
+                        $SP,
+                    >,
                 >,
             >
         );
@@ -125,7 +164,11 @@ macro_rules! ieee802154_component_static {
                     capsules_extra::ieee802154::framer::Framer<
                         'static,
                         capsules_extra::ieee802154::mac::AwakeMac<'static, $R>,
-                        capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, $A>,
+                        capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<
+                            'static,
+                            $A,
+                            $SP,
+                        >,
                     >,
                 >,
             >
@@ -149,34 +192,39 @@ macro_rules! ieee802154_component_static {
             radio_rx_crypt_buf,
         )
     };};
+    ($R:ty, $A:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::ieee802154_component_static!($R, $A, RoundRobinPolicy)
+    };};
 }
 
-pub type Ieee802154ComponentType<R, A> = capsules_extra::ieee802154::RadioDriver<
+pub type Ieee802154ComponentType<R, A, SP> = capsules_extra::ieee802154::RadioDriver<
     'static,
     capsules_extra::ieee802154::virtual_mac::MacUser<
         'static,
         capsules_extra::ieee802154::framer::Framer<
             'static,
             capsules_extra::ieee802154::mac::AwakeMac<'static, R>,
-            capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A>,
+            capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A, SP>,
         >,
     >,
 >;
 
-pub type Ieee802154ComponentMacDeviceType<R, A> = capsules_extra::ieee802154::framer::Framer<
+pub type Ieee802154ComponentMacDeviceType<R, A, SP> = capsules_extra::ieee802154::framer::Framer<
     'static,
     capsules_extra::ieee802154::mac::AwakeMac<'static, R>,
-    capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A>,
+    capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A, SP>,
 >;
 
 pub struct Ieee802154Component<
     R: 'static + kernel::hil::radio::Radio<'static>,
     A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB,
+    SP: 'static + SelectionPolicy<&'static VirtualAES128CCM<'static, A, SP>>,
 > {
     board_kernel: &'static kernel::Kernel,
     driver_num: usize,
     radio: &'static R,
-    aes_mux: &'static MuxAES128CCM<'static, A>,
+    aes_mux: &'static MuxAES128CCM<'static, A, SP>,
     pan_id: capsules_extra::net::ieee802154::PanID,
     short_addr: u16,
     long_addr: [u8; 8],
@@ -185,13 +233,14 @@ pub struct Ieee802154Component<
 impl<
         R: 'static + kernel::hil::radio::Radio<'static>,
         A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB,
-    > Ieee802154Component<R, A>
+        SP: 'static + SelectionPolicy<&'static VirtualAES128CCM<'static, A, SP>>,
+    > Ieee802154Component<R, A, SP>
 {
     pub fn new(
         board_kernel: &'static kernel::Kernel,
         driver_num: usize,
         radio: &'static R,
-        aes_mux: &'static MuxAES128CCM<'static, A>,
+        aes_mux: &'static MuxAES128CCM<'static, A, SP>,
         pan_id: capsules_extra::net::ieee802154::PanID,
         short_addr: u16,
         long_addr: [u8; 8],
@@ -211,18 +260,19 @@ impl<
 impl<
         R: 'static + kernel::hil::radio::Radio<'static>,
         A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB,
-    > Component for Ieee802154Component<R, A>
+        SP: 'static + SelectionPolicy<&'static VirtualAES128CCM<'static, A, SP>>,
+    > Component for Ieee802154Component<R, A, SP>
 {
     type StaticInput = (
         &'static mut MaybeUninit<
-            capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A>,
+            capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A, SP>,
         >,
         &'static mut MaybeUninit<capsules_extra::ieee802154::mac::AwakeMac<'static, R>>,
         &'static mut MaybeUninit<
             capsules_extra::ieee802154::framer::Framer<
                 'static,
                 AwakeMac<'static, R>,
-                capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A>,
+                capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A, SP>,
             >,
         >,
         &'static mut MaybeUninit<
@@ -231,7 +281,7 @@ impl<
                 capsules_extra::ieee802154::framer::Framer<
                     'static,
                     AwakeMac<'static, R>,
-                    capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A>,
+                    capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A, SP>,
                 >,
             >,
         >,
@@ -241,7 +291,7 @@ impl<
                 capsules_extra::ieee802154::framer::Framer<
                     'static,
                     AwakeMac<'static, R>,
-                    capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A>,
+                    capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A, SP>,
                 >,
             >,
         >,
@@ -253,7 +303,11 @@ impl<
                     capsules_extra::ieee802154::framer::Framer<
                         'static,
                         AwakeMac<'static, R>,
-                        capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A>,
+                        capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<
+                            'static,
+                            A,
+                            SP,
+                        >,
                     >,
                 >,
             >,
@@ -271,7 +325,7 @@ impl<
                 capsules_extra::ieee802154::framer::Framer<
                     'static,
                     AwakeMac<'static, R>,
-                    capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A>,
+                    capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A, SP>,
                 >,
             >,
         >,
@@ -280,7 +334,7 @@ impl<
             capsules_extra::ieee802154::framer::Framer<
                 'static,
                 AwakeMac<'static, R>,
-                capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A>,
+                capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A, SP>,
             >,
         >,
     );

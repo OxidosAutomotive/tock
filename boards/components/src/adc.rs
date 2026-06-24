@@ -6,9 +6,9 @@
 
 use capsules_core::adc::AdcDedicated;
 use capsules_core::adc::AdcVirtualized;
+use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
 use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_adc::{AdcDevice, MuxAdc};
-use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use kernel::capabilities;
 use kernel::component::Component;
@@ -17,6 +17,9 @@ use kernel::hil::adc;
 
 #[macro_export]
 macro_rules! adc_mux_component_static {
+    ($A:ty, $SP:ty $(,)?) => {{
+        kernel::static_buf!(capsules_core::virtualizers::virtual_adc::MuxAdc<'static, $A, $SP>)
+    };};
     ($A:ty $(,)?) => {{
         kernel::static_buf!(capsules_core::virtualizers::virtual_adc::MuxAdc<'static, $A>)
     };};
@@ -24,6 +27,9 @@ macro_rules! adc_mux_component_static {
 
 #[macro_export]
 macro_rules! adc_component_static {
+    ($A:ty, $SP:ty $(,)?) => {{
+        kernel::static_buf!(capsules_core::virtualizers::virtual_adc::AdcDevice<'static, $A, $SP>)
+    };};
     ($A:ty $(,)?) => {{
         kernel::static_buf!(capsules_core::virtualizers::virtual_adc::AdcDevice<'static, $A>)
     };};
@@ -61,33 +67,42 @@ macro_rules! adc_dedicated_component_static {
 
 pub struct AdcMuxComponent<
     A: 'static + adc::Adc<'static>,
-    P: 'static + SelectionPolicy<&'static AdcDevice<'static, A, P>>,
+    SP: 'static + SelectionPolicy<&'static AdcDevice<'static, A, SP>> = RoundRobinPolicy,
 > {
     adc: &'static A,
-    phantom: PhantomData<P>,
+    selection_policy: SP,
 }
 
-impl<
-        A: 'static + adc::Adc<'static>,
-        P: 'static + SelectionPolicy<&'static AdcDevice<'static, A, P>>,
-    > AdcMuxComponent<A, P>
-{
+impl<A: 'static + adc::Adc<'static>> AdcMuxComponent<A> {
     pub fn new(adc: &'static A) -> Self {
         AdcMuxComponent {
             adc,
-            phantom: PhantomData,
+            selection_policy: RoundRobinPolicy::default(),
         }
     }
 }
 
-impl<A: 'static + adc::Adc<'static>, P: SelectionPolicy<&'static AdcDevice<'static, A, P>>>
-    Component for AdcMuxComponent<A, P>
+impl<
+        A: 'static + adc::Adc<'static>,
+        SP: 'static + SelectionPolicy<&'static AdcDevice<'static, A, SP>>,
+    > AdcMuxComponent<A, SP>
 {
-    type StaticInput = &'static mut MaybeUninit<MuxAdc<'static, A, P>>;
-    type Output = &'static MuxAdc<'static, A, P>;
+    pub fn new_with_policy(adc: &'static A, policy: SP) -> Self {
+        AdcMuxComponent {
+            adc,
+            selection_policy: policy,
+        }
+    }
+}
+
+impl<A: 'static + adc::Adc<'static>, SP: SelectionPolicy<&'static AdcDevice<'static, A, SP>>>
+    Component for AdcMuxComponent<A, SP>
+{
+    type StaticInput = &'static mut MaybeUninit<MuxAdc<'static, A, SP>>;
+    type Output = &'static MuxAdc<'static, A, SP>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
-        let adc_mux = static_buffer.write(MuxAdc::new_with_policy(self.adc));
+        let adc_mux = static_buffer.write(MuxAdc::new_with_policy(self.adc, self.selection_policy));
 
         self.adc.set_client(adc_mux);
 
@@ -97,9 +112,9 @@ impl<A: 'static + adc::Adc<'static>, P: SelectionPolicy<&'static AdcDevice<'stat
 
 pub struct AdcComponent<
     A: 'static + adc::Adc<'static>,
-    P: 'static + SelectionPolicy<&'static AdcDevice<'static, A, P>>,
+    SP: 'static + SelectionPolicy<&'static AdcDevice<'static, A, SP>> = RoundRobinPolicy,
 > {
-    adc_mux: &'static MuxAdc<'static, A, P>,
+    adc_mux: &'static MuxAdc<'static, A, SP>,
     channel: A::Channel,
 }
 
@@ -116,11 +131,11 @@ impl<
     }
 }
 
-impl<A: 'static + adc::Adc<'static>, P: SelectionPolicy<&'static AdcDevice<'static, A, P>>>
-    Component for AdcComponent<A, P>
+impl<A: 'static + adc::Adc<'static>, SP: SelectionPolicy<&'static AdcDevice<'static, A, SP>>>
+    Component for AdcComponent<A, SP>
 {
-    type StaticInput = &'static mut MaybeUninit<AdcDevice<'static, A, P>>;
-    type Output = &'static AdcDevice<'static, A, P>;
+    type StaticInput = &'static mut MaybeUninit<AdcDevice<'static, A, SP>>;
+    type Output = &'static AdcDevice<'static, A, SP>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let adc_device = static_buffer.write(AdcDevice::new(self.adc_mux, self.channel));

@@ -31,33 +31,38 @@ use kernel::hil;
 
 #[macro_export]
 macro_rules! low_level_debug_component_static {
-    () => {{
-        let uart =
-            kernel::static_buf!(capsules_core::virtualizers::virtual_uart::UartDevice<'static>);
+    ($SP:ty) => {{
+        let uart = kernel::static_buf!(
+            capsules_core::virtualizers::virtual_uart::UartDevice<'static, $SP>
+        );
         let buffer = kernel::static_buf!([u8; capsules_core::low_level_debug::BUF_LEN]);
         let lldb = kernel::static_buf!(
             capsules_core::low_level_debug::LowLevelDebug<
                 'static,
-                capsules_core::virtualizers::virtual_uart::UartDevice<'static>,
+                capsules_core::virtualizers::virtual_uart::UartDevice<'static, $SP>,
             >
         );
 
         (uart, buffer, lldb)
     };};
+    () => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::low_level_debug_component_static!(RoundRobinPolicy)
+    };};
 }
 
-pub struct LowLevelDebugComponent<P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static> {
+pub struct LowLevelDebugComponent<SP: SelectionPolicy<&'static UartDevice<'static, SP>> + 'static> {
     board_kernel: &'static kernel::Kernel,
     driver_num: usize,
-    uart_mux: &'static MuxUart<'static, P>,
+    uart_mux: &'static MuxUart<'static, SP>,
 }
 
-impl<P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static> LowLevelDebugComponent<P> {
+impl<SP: SelectionPolicy<&'static UartDevice<'static, SP>> + 'static> LowLevelDebugComponent<SP> {
     pub fn new(
         board_kernel: &'static kernel::Kernel,
         driver_num: usize,
-        uart_mux: &'static MuxUart<P>,
-    ) -> LowLevelDebugComponent<P> {
+        uart_mux: &'static MuxUart<SP>,
+    ) -> LowLevelDebugComponent<SP> {
         LowLevelDebugComponent {
             board_kernel,
             driver_num,
@@ -66,15 +71,15 @@ impl<P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static> LowLevelDebu
     }
 }
 
-impl<P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static> Component
-    for LowLevelDebugComponent<P>
+impl<SP: SelectionPolicy<&'static UartDevice<'static, SP>> + 'static> Component
+    for LowLevelDebugComponent<SP>
 {
     type StaticInput = (
-        &'static mut MaybeUninit<UartDevice<'static, P>>,
+        &'static mut MaybeUninit<UartDevice<'static, SP>>,
         &'static mut MaybeUninit<[u8; capsules_core::low_level_debug::BUF_LEN]>,
-        &'static mut MaybeUninit<LowLevelDebug<'static, UartDevice<'static, P>>>,
+        &'static mut MaybeUninit<LowLevelDebug<'static, UartDevice<'static, SP>>>,
     );
-    type Output = &'static LowLevelDebug<'static, UartDevice<'static, P>>;
+    type Output = &'static LowLevelDebug<'static, UartDevice<'static, SP>>;
 
     fn finalize(self, s: Self::StaticInput) -> Self::Output {
         let grant_cap = create_capability!(capabilities::MemoryAllocationCapability);

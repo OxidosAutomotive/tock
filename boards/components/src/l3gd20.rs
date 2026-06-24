@@ -13,6 +13,7 @@
 //!     components::l3gd20_component_static!(stm32f429zi::spi::Spi));
 //! ```
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_spi::{MuxSpiMaster, VirtualSpiMasterDevice};
 use capsules_extra::l3gd20::L3gd20Spi;
 use core::mem::MaybeUninit;
@@ -25,21 +26,25 @@ use kernel::hil::spi::SpiMasterDevice;
 // Setup static space for the objects.
 #[macro_export]
 macro_rules! l3gd20_component_static {
-    ($S:ty $(,)?) => {{
+    ($S:ty, $SP:ty $(,)?) => {{
         let txbuffer = kernel::static_buf!([u8; capsules_extra::l3gd20::TX_BUF_LEN]);
         let rxbuffer = kernel::static_buf!([u8; capsules_extra::l3gd20::RX_BUF_LEN]);
 
         let spi = kernel::static_buf!(
-            capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S>
+            capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S, $SP>
         );
         let l3gd20spi = kernel::static_buf!(
             capsules_extra::l3gd20::L3gd20Spi<
                 'static,
-                capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S>,
+                capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S, $SP>,
             >
         );
 
         (spi, l3gd20spi, txbuffer, rxbuffer)
+    };};
+    ($S:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::l3gd20_component_static!($S, RoundRobinPolicy)
     };};
 }
 
@@ -48,8 +53,9 @@ pub type L3gd20ComponentType<S> = capsules_extra::l3gd20::L3gd20Spi<'static, S>;
 pub struct L3gd20Component<
     S: 'static + spi::SpiMaster<'static>,
     CS: spi::cs::IntoChipSelect<S::ChipSelect, spi::cs::ActiveLow>,
+    SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
 > {
-    spi_mux: &'static MuxSpiMaster<'static, S>,
+    spi_mux: &'static MuxSpiMaster<'static, S, SP>,
     chip_select: CS,
     board_kernel: &'static kernel::Kernel,
     driver_num: usize,
@@ -58,10 +64,11 @@ pub struct L3gd20Component<
 impl<
         S: 'static + spi::SpiMaster<'static>,
         CS: spi::cs::IntoChipSelect<S::ChipSelect, spi::cs::ActiveLow>,
-    > L3gd20Component<S, CS>
+        SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
+    > L3gd20Component<S, CS, SP>
 {
     pub fn new(
-        spi_mux: &'static MuxSpiMaster<'static, S>,
+        spi_mux: &'static MuxSpiMaster<'static, S, SP>,
         chip_select: CS,
         board_kernel: &'static kernel::Kernel,
         driver_num: usize,
@@ -78,15 +85,16 @@ impl<
 impl<
         S: 'static + spi::SpiMaster<'static>,
         CS: spi::cs::IntoChipSelect<S::ChipSelect, spi::cs::ActiveLow>,
-    > Component for L3gd20Component<S, CS>
+        SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
+    > Component for L3gd20Component<S, CS, SP>
 {
     type StaticInput = (
-        &'static mut MaybeUninit<VirtualSpiMasterDevice<'static, S>>,
-        &'static mut MaybeUninit<L3gd20Spi<'static, VirtualSpiMasterDevice<'static, S>>>,
+        &'static mut MaybeUninit<VirtualSpiMasterDevice<'static, S, SP>>,
+        &'static mut MaybeUninit<L3gd20Spi<'static, VirtualSpiMasterDevice<'static, S, SP>>>,
         &'static mut MaybeUninit<[u8; capsules_extra::l3gd20::TX_BUF_LEN]>,
         &'static mut MaybeUninit<[u8; capsules_extra::l3gd20::RX_BUF_LEN]>,
     );
-    type Output = &'static L3gd20Spi<'static, VirtualSpiMasterDevice<'static, S>>;
+    type Output = &'static L3gd20Spi<'static, VirtualSpiMasterDevice<'static, S, SP>>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let grant_cap = create_capability!(capabilities::MemoryAllocationCapability);

@@ -78,8 +78,11 @@ macro_rules! debug_writer_component_static {
 
         (uart, ring, buffer, debug)
     };};
-    (policy: $P: ty) => {{
-        $crate::debug_writer_component_static!($crate::debug_writer::DEFAULT_DEBUG_BUFFER_KBYTE, $P)
+    (policy: $SP: ty) => {{
+        $crate::debug_writer_component_static!(
+            $crate::debug_writer::DEFAULT_DEBUG_BUFFER_KBYTE,
+            $SP
+        )
     };};
 }
 
@@ -109,9 +112,9 @@ macro_rules! debug_writer_no_mux_component_static {
 pub struct DebugWriterComponent<
     const BUF_SIZE_BYTES: usize,
     C: SetDebugWriterCapability,
-    P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static,
+    SP: SelectionPolicy<&'static UartDevice<'static, SP>> + 'static,
 > {
-    uart_mux: &'static MuxUart<'static, P>,
+    uart_mux: &'static MuxUart<'static, SP>,
     marker: core::marker::PhantomData<[u8; BUF_SIZE_BYTES]>,
     capability: C,
 }
@@ -182,11 +185,11 @@ unsafe impl capabilities::ProcessManagementCapability for Capability {}
 impl<
         const BUF_SIZE_BYTES: usize,
         C: SetDebugWriterCapability,
-        P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static,
-    > Component for DebugWriterComponent<BUF_SIZE_BYTES, C, P>
+        SP: SelectionPolicy<&'static UartDevice<'static, SP>> + 'static,
+    > Component for DebugWriterComponent<BUF_SIZE_BYTES, C, SP>
 {
     type StaticInput = (
-        &'static mut MaybeUninit<UartDevice<'static, P>>,
+        &'static mut MaybeUninit<UartDevice<'static, SP>>,
         &'static mut MaybeUninit<RingBuffer<'static, u8>>,
         &'static mut MaybeUninit<[u8; BUF_SIZE_BYTES]>,
         &'static mut MaybeUninit<UartDebugWriter>,

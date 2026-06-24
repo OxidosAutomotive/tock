@@ -35,6 +35,7 @@
 //! // wait for `ScreenClient::screen_is_ready` callback
 //! ```
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use capsules_core::virtualizers::virtual_spi::{MuxSpiMaster, VirtualSpiMasterDevice};
 use capsules_extra::lpm013m126::Lpm013m126;
@@ -47,48 +48,54 @@ use kernel::hil::{self, gpio};
 /// Setup static space for the driver and its requirements.
 #[macro_export]
 macro_rules! lpm013m126_component_static {
-    ($A:ty, $P:ty, $S:ty $(,)?) => {{
+    ($A:ty, $P:ty, $S:ty, $SP:ty $(,)?) => {{
         let alarm = kernel::static_buf!(
             capsules_core::virtualizers::virtual_alarm::VirtualMuxAlarm<'static, $A>
         );
         let buffer = kernel::static_buf!([u8; capsules_extra::lpm013m126::BUF_LEN]);
         let spi_device = kernel::static_buf!(
-            capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S>
+            capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S, $SP>
         );
         let lpm013m126 = kernel::static_buf!(
             capsules_extra::lpm013m126::Lpm013m126<
                 'static,
                 VirtualMuxAlarm<'static, $A>,
                 $P,
-                VirtualSpiMasterDevice<'static, $S>,
+                VirtualSpiMasterDevice<'static, $S, $SP>,
             >
         );
 
         (alarm, buffer, spi_device, lpm013m126)
     }};
+    ($A:ty, $P:ty, $S:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::lpm013m126_component_static!($A, $P, $S, RoundRobinPolicy)
+    };};
 }
 
-pub struct Lpm013m126Component<A, P, S>
+pub struct Lpm013m126Component<A, P, S, SP>
 where
     A: 'static + Alarm<'static>,
     P: 'static + gpio::Pin,
     S: 'static + SpiMaster<'static>,
+    SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
 {
-    spi: &'static MuxSpiMaster<'static, S>,
+    spi: &'static MuxSpiMaster<'static, S, SP>,
     chip_select: S::ChipSelect,
     disp: &'static P,
     extcomin: &'static P,
     alarm_mux: &'static MuxAlarm<'static, A>,
 }
 
-impl<A, P, S> Lpm013m126Component<A, P, S>
+impl<A, P, S, SP> Lpm013m126Component<A, P, S, SP>
 where
     A: 'static + Alarm<'static>,
     P: 'static + gpio::Pin,
     S: 'static + SpiMaster<'static>,
+    SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
 {
     pub fn new<I: kernel::hil::spi::cs::IntoChipSelect<S::ChipSelect, hil::spi::cs::ActiveHigh>>(
-        spi: &'static MuxSpiMaster<'static, S>,
+        spi: &'static MuxSpiMaster<'static, S, SP>,
 
         chip_select: I,
         disp: &'static P,
@@ -105,25 +112,31 @@ where
     }
 }
 
-impl<A, P, S> Component for Lpm013m126Component<A, P, S>
+impl<A, P, S, SP> Component for Lpm013m126Component<A, P, S, SP>
 where
     A: 'static + Alarm<'static>,
     P: 'static + gpio::Pin,
     S: 'static + SpiMaster<'static>,
+    SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
 {
     type StaticInput = (
         &'static mut MaybeUninit<VirtualMuxAlarm<'static, A>>,
         &'static mut MaybeUninit<[u8; capsules_extra::lpm013m126::BUF_LEN]>,
-        &'static mut MaybeUninit<VirtualSpiMasterDevice<'static, S>>,
+        &'static mut MaybeUninit<VirtualSpiMasterDevice<'static, S, SP>>,
         &'static mut MaybeUninit<
-            Lpm013m126<'static, VirtualMuxAlarm<'static, A>, P, VirtualSpiMasterDevice<'static, S>>,
+            Lpm013m126<
+                'static,
+                VirtualMuxAlarm<'static, A>,
+                P,
+                VirtualSpiMasterDevice<'static, S, SP>,
+            >,
         >,
     );
     type Output = &'static Lpm013m126<
         'static,
         VirtualMuxAlarm<'static, A>,
         P,
-        VirtualSpiMasterDevice<'static, S>,
+        VirtualSpiMasterDevice<'static, S, SP>,
     >;
 
     fn finalize(self, s: Self::StaticInput) -> Self::Output {

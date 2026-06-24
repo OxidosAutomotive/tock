@@ -24,6 +24,8 @@
 //! ));
 //! ```
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
+use capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM;
 use core::mem::MaybeUninit;
 use kernel::capabilities;
 use kernel::component::Component;
@@ -37,6 +39,15 @@ const CRYPT_SIZE: usize = 7 * hil::symmetric_encryption::AES128_BLOCK_SIZE;
 
 #[macro_export]
 macro_rules! aes_virtual_component_static {
+    ($A:ty, $SP:ty $(,)?) => {{
+        const CRYPT_SIZE: usize = 7 * kernel::hil::symmetric_encryption::AES128_BLOCK_SIZE;
+        let virtual_aes = kernel::static_buf!(
+            capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, $A, $SP>
+        );
+        let crypt_buf = kernel::static_buf!([u8; CRYPT_SIZE]);
+
+        (virtual_aes, crypt_buf)
+    };};
     ($A:ty $(,)?) => {{
         const CRYPT_SIZE: usize = 7 * kernel::hil::symmetric_encryption::AES128_BLOCK_SIZE;
         let virtual_aes = kernel::static_buf!(
@@ -61,29 +72,42 @@ macro_rules! aes_driver_component_static {
     };};
 }
 
-pub struct AesVirtualComponent<A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB> {
-    aes_mux: &'static capsules_core::virtualizers::virtual_aes_ccm::MuxAES128CCM<'static, A>,
+pub struct AesVirtualComponent<
+    A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB,
+    SP: 'static + SelectionPolicy<&'static VirtualAES128CCM<'static, A, SP>>,
+> {
+    aes_mux: &'static capsules_core::virtualizers::virtual_aes_ccm::MuxAES128CCM<'static, A, SP>,
 }
 
-impl<A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB> AesVirtualComponent<A> {
+impl<
+        A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB,
+        SP: 'static + SelectionPolicy<&'static VirtualAES128CCM<'static, A, SP>>,
+    > AesVirtualComponent<A, SP>
+{
     pub fn new(
-        aes_mux: &'static capsules_core::virtualizers::virtual_aes_ccm::MuxAES128CCM<'static, A>,
+        aes_mux: &'static capsules_core::virtualizers::virtual_aes_ccm::MuxAES128CCM<
+            'static,
+            A,
+            SP,
+        >,
     ) -> Self {
         Self { aes_mux }
     }
 }
 
-impl<A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB> Component
-    for AesVirtualComponent<A>
+impl<
+        A: 'static + AES128<'static> + AES128Ctr + AES128CBC + AES128ECB,
+        SP: 'static + SelectionPolicy<&'static VirtualAES128CCM<'static, A, SP>>,
+    > Component for AesVirtualComponent<A, SP>
 {
     type StaticInput = (
         &'static mut MaybeUninit<
-            capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A>,
+            capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A, SP>,
         >,
         &'static mut MaybeUninit<[u8; CRYPT_SIZE]>,
     );
     type Output =
-        &'static capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A>;
+        &'static capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, A, SP>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let crypt_buf = static_buffer.1.write([0; CRYPT_SIZE]);

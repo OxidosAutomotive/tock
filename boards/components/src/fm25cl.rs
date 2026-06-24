@@ -13,6 +13,7 @@
 //!     .finalize(components::fm25cl_component_static!(stm32f429zi::spi::Spi));
 //! ```
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_spi::{MuxSpiMaster, VirtualSpiMasterDevice};
 use capsules_extra::fm25cl::FM25CL;
 use core::mem::MaybeUninit;
@@ -22,6 +23,22 @@ use kernel::hil::spi::SpiMasterDevice;
 
 #[macro_export]
 macro_rules! fm25cl_component_static {
+    ($S:ty, $SP:ty $(,)?) => {{
+        let txbuffer = kernel::static_buf!([u8; capsules_extra::fm25cl::BUF_LEN]);
+        let rxbuffer = kernel::static_buf!([u8; capsules_extra::fm25cl::BUF_LEN]);
+
+        let spi = kernel::static_buf!(
+            capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S, $SP>
+        );
+        let fm25cl = kernel::static_buf!(
+            capsules_extra::fm25cl::FM25CL<
+                'static,
+                capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S, $SP>,
+            >
+        );
+
+        (spi, fm25cl, txbuffer, rxbuffer)
+    };};
     ($S:ty $(,)?) => {{
         let txbuffer = kernel::static_buf!([u8; capsules_extra::fm25cl::BUF_LEN]);
         let rxbuffer = kernel::static_buf!([u8; capsules_extra::fm25cl::BUF_LEN]);
@@ -43,17 +60,19 @@ macro_rules! fm25cl_component_static {
 pub struct Fm25clComponent<
     S: 'static + spi::SpiMaster<'static>,
     CS: spi::cs::IntoChipSelect<S::ChipSelect, spi::cs::ActiveLow>,
+    SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
 > {
-    spi_mux: &'static MuxSpiMaster<'static, S>,
+    spi_mux: &'static MuxSpiMaster<'static, S, SP>,
     chip_select: CS,
 }
 
 impl<
         S: 'static + spi::SpiMaster<'static>,
         CS: spi::cs::IntoChipSelect<S::ChipSelect, spi::cs::ActiveLow>,
-    > Fm25clComponent<S, CS>
+        SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
+    > Fm25clComponent<S, CS, SP>
 {
-    pub fn new(spi_mux: &'static MuxSpiMaster<'static, S>, chip_select: CS) -> Self {
+    pub fn new(spi_mux: &'static MuxSpiMaster<'static, S, SP>, chip_select: CS) -> Self {
         Self {
             spi_mux,
             chip_select,
@@ -64,15 +83,16 @@ impl<
 impl<
         S: 'static + spi::SpiMaster<'static>,
         CS: spi::cs::IntoChipSelect<S::ChipSelect, spi::cs::ActiveLow>,
-    > Component for Fm25clComponent<S, CS>
+        SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
+    > Component for Fm25clComponent<S, CS, SP>
 {
     type StaticInput = (
-        &'static mut MaybeUninit<VirtualSpiMasterDevice<'static, S>>,
-        &'static mut MaybeUninit<FM25CL<'static, VirtualSpiMasterDevice<'static, S>>>,
+        &'static mut MaybeUninit<VirtualSpiMasterDevice<'static, S, SP>>,
+        &'static mut MaybeUninit<FM25CL<'static, VirtualSpiMasterDevice<'static, S, SP>>>,
         &'static mut MaybeUninit<[u8; capsules_extra::fm25cl::BUF_LEN]>,
         &'static mut MaybeUninit<[u8; capsules_extra::fm25cl::BUF_LEN]>,
     );
-    type Output = &'static FM25CL<'static, VirtualSpiMasterDevice<'static, S>>;
+    type Output = &'static FM25CL<'static, VirtualSpiMasterDevice<'static, S, SP>>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let spi_device = static_buffer.0.write(VirtualSpiMasterDevice::new(

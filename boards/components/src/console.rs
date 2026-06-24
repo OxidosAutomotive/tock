@@ -54,6 +54,7 @@ use capsules_core::console::DEFAULT_BUF_SIZE;
 #[macro_export]
 macro_rules! uart_mux_component_static {
     // Common logic for both branches
+<<<<<<< HEAD
     ($rx_buffer_len: expr) => {{
         use capsules_core::virtualizers::virtual_uart::MuxUart;
         use kernel::static_buf;
@@ -69,32 +70,70 @@ macro_rules! uart_mux_component_static {
     };
     // Allow choosing a selection policy.
     ($rx_buffer_len: expr, $P: ty) => {{
+=======
+    ($rx_buffer_len: expr, $SP: ty) => {{
+>>>>>>> 335478104 (patch for all the virtualizers, except I2C)
         use capsules_core::virtualizers::virtual_uart::MuxUart;
         use kernel::static_buf;
-        let uart_mux = static_buf!(MuxUart<'static, $P>);
+        let uart_mux = static_buf!(MuxUart<'static, $SP>);
         let rx_buf = static_buf!([u8; $rx_buffer_len]);
         (uart_mux, rx_buf)
     }};
+<<<<<<< HEAD
     ($P: ty) => {
         $crate::uart_mux_component_static!(
             capsules_core::virtualizers::virtual_uart::RX_BUF_LEN,
             $P
         );
     };
+=======
+    (policy: $SP: ty) => {{
+        $crate::uart_mux_component_static!(
+            capsules_core::virtualizers::virtual_uart::RX_BUF_LEN,
+            $SP
+        )
+    }};
+    ($rx_buffer_len: literal) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::uart_mux_component_static!($rx_buffer_len, RoundRobinPolicy)
+    }};
+    // By default, if no selection policy is provided we will use the `RoundRobinPolicy`.
+    // This option has been chosen as the default to maintain backwards compatibility.
+    () => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::uart_mux_component_static!(
+            capsules_core::virtualizers::virtual_uart::RX_BUF_LEN,
+            RoundRobinPolicy
+        )
+    }};
+>>>>>>> 335478104 (patch for all the virtualizers, except I2C)
 }
 
 pub struct UartMuxComponent<
     const RX_BUF_LEN: usize,
+<<<<<<< HEAD
     P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static = RoundRobinPolicy,
+=======
+    SP: 'static + SelectionPolicy<&'static UartDevice<'static, SP>> = RoundRobinPolicy,
+>>>>>>> 335478104 (patch for all the virtualizers, except I2C)
 > {
     uart: &'static dyn uart::Uart<'static>,
     baud_rate: u32,
-    selection_policy: P,
+    selection_policy: SP,
 }
 
 impl<const RX_BUF_LEN: usize> UartMuxComponent<RX_BUF_LEN> {
+<<<<<<< HEAD
     pub fn new(uart: &'static dyn uart::Uart<'static>, baud_rate: u32) -> Self {
         Self {
+=======
+    /// Create a new MuxComponent with the [`RoundRobinPolicy`] selection policy.
+    pub fn new(
+        uart: &'static dyn uart::Uart<'static>,
+        baud_rate: u32,
+    ) -> UartMuxComponent<RX_BUF_LEN> {
+        UartMuxComponent {
+>>>>>>> 335478104 (patch for all the virtualizers, except I2C)
             uart,
             baud_rate,
             selection_policy: RoundRobinPolicy::default(),
@@ -103,13 +142,13 @@ impl<const RX_BUF_LEN: usize> UartMuxComponent<RX_BUF_LEN> {
 }
 
 // Implemented to specify a custom selection policy
-impl<const RX_BUF_LEN: usize, P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static>
-    UartMuxComponent<RX_BUF_LEN, P>
+impl<const RX_BUF_LEN: usize, SP: SelectionPolicy<&'static UartDevice<'static, SP>> + 'static>
+    UartMuxComponent<RX_BUF_LEN, SP>
 {
     pub fn new_with_policy(
         uart: &'static dyn uart::Uart<'static>,
         baud_rate: u32,
-        selection_policy: P,
+        selection_policy: SP,
     ) -> Self {
         Self {
             uart,
@@ -119,14 +158,14 @@ impl<const RX_BUF_LEN: usize, P: SelectionPolicy<&'static UartDevice<'static, P>
     }
 }
 
-impl<const RX_BUF_LEN: usize, P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static>
-    Component for UartMuxComponent<RX_BUF_LEN, P>
+impl<const RX_BUF_LEN: usize, SP: SelectionPolicy<&'static UartDevice<'static, SP>> + 'static>
+    Component for UartMuxComponent<RX_BUF_LEN, SP>
 {
     type StaticInput = (
-        &'static mut MaybeUninit<MuxUart<'static, P>>,
+        &'static mut MaybeUninit<MuxUart<'static, SP>>,
         &'static mut MaybeUninit<[u8; RX_BUF_LEN]>,
     );
-    type Output = &'static MuxUart<'static, P>;
+    type Output = &'static MuxUart<'static, SP>;
 
     fn finalize(self, s: Self::StaticInput) -> Self::Output {
         let rx_buf = s.1.write([0; RX_BUF_LEN]);
@@ -149,43 +188,26 @@ impl<const RX_BUF_LEN: usize, P: SelectionPolicy<&'static UartDevice<'static, P>
 #[macro_export]
 macro_rules! console_component_static {
     // Common logic for both branches
-    ($rx_buffer_len: expr, $tx_buffer_len: expr) => {{
+    ($rx_buffer_len: expr, $tx_buffer_len: expr, $SP: ty) => {{
         use capsules_core::console::{Console, DEFAULT_BUF_SIZE};
         use capsules_core::virtualizers::virtual_uart::UartDevice;
         use kernel::static_buf;
         let read_buf = static_buf!([u8; $rx_buffer_len]);
         let write_buf = static_buf!([u8; $tx_buffer_len]);
         // Create virtual device for console.
-        let console_uart = static_buf!(UartDevice);
+        let console_uart = static_buf!(UartDevice<$SP>);
         let console = static_buf!(Console<'static>);
         (write_buf, read_buf, console_uart, console)
     }};
-    () => {
-        $crate::console_component_static!(DEFAULT_BUF_SIZE, DEFAULT_BUF_SIZE);
-    };
-    ($rx_buffer_len: literal, $tx_buffer_len: literal) => {
-        $crate::console_component_static!($rx_buffer_len, $tx_buffer_len);
-    };
-    ($rx_buffer_len: expr, $tx_buffer_len: expr, $P: ty) => {{
-        use capsules_core::console::{Console, DEFAULT_BUF_SIZE};
-        use capsules_core::virtualizers::virtual_uart::UartDevice;
-        use kernel::static_buf;
-        let read_buf = static_buf!([u8; $rx_buffer_len]);
-        let write_buf = static_buf!([u8; $tx_buffer_len]);
-        // Create virtual device for console.
-        let console_uart = static_buf!(UartDevice<$P>);
-        let console = static_buf!(Console<'static>);
-        (write_buf, read_buf, console_uart, console)
-    }};
-    ($rx_buffer_len: literal, $tx_buffer_len: literal, $P: ty) => {
-        $crate::console_component_static!($rx_buffer_len, $tx_buffer_len, $P);
+    ($rx_buffer_len: literal, $tx_buffer_len: literal, $SP: ty) => {
+        $crate::console_component_static!($rx_buffer_len, $tx_buffer_len, $SP);
     };
     ($rx_buffer_len: literal, $tx_buffer_len: literal) => {{
         use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
         $crate::console_component_static!($rx_buffer_len, $tx_buffer_len, RoundRobinPolicy)
     }};
-    ($P: ty) => {
-        $crate::console_component_static!(DEFAULT_BUF_SIZE, DEFAULT_BUF_SIZE, $P);
+    ($SP: ty) => {
+        $crate::console_component_static!(DEFAULT_BUF_SIZE, DEFAULT_BUF_SIZE, $SP);
     };
     () => {{
         use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
@@ -196,24 +218,24 @@ macro_rules! console_component_static {
 pub struct ConsoleComponent<
     const RX_BUF_LEN: usize,
     const TX_BUF_LEN: usize,
-    P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static,
+    SP: SelectionPolicy<&'static UartDevice<'static, SP>> + 'static,
 > {
     board_kernel: &'static kernel::Kernel,
     driver_num: usize,
-    uart_mux: &'static MuxUart<'static, P>,
+    uart_mux: &'static MuxUart<'static, SP>,
 }
 
 impl<
         const RX_BUF_LEN: usize,
         const TX_BUF_LEN: usize,
-        P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static,
-    > ConsoleComponent<RX_BUF_LEN, TX_BUF_LEN, P>
+        SP: SelectionPolicy<&'static UartDevice<'static, SP>> + 'static,
+    > ConsoleComponent<RX_BUF_LEN, TX_BUF_LEN, SP>
 {
     pub fn new(
         board_kernel: &'static kernel::Kernel,
         driver_num: usize,
-        uart_mux: &'static MuxUart<P>,
-    ) -> ConsoleComponent<RX_BUF_LEN, TX_BUF_LEN, P> {
+        uart_mux: &'static MuxUart<SP>,
+    ) -> ConsoleComponent<RX_BUF_LEN, TX_BUF_LEN, SP> {
         ConsoleComponent {
             board_kernel,
             driver_num,
@@ -225,13 +247,13 @@ impl<
 impl<
         const RX_BUF_LEN: usize,
         const TX_BUF_LEN: usize,
-        P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static,
-    > Component for ConsoleComponent<RX_BUF_LEN, TX_BUF_LEN, P>
+        SP: SelectionPolicy<&'static UartDevice<'static, SP>> + 'static,
+    > Component for ConsoleComponent<RX_BUF_LEN, TX_BUF_LEN, SP>
 {
     type StaticInput = (
         &'static mut MaybeUninit<[u8; TX_BUF_LEN]>,
         &'static mut MaybeUninit<[u8; RX_BUF_LEN]>,
-        &'static mut MaybeUninit<UartDevice<'static, P>>,
+        &'static mut MaybeUninit<UartDevice<'static, SP>>,
         &'static mut MaybeUninit<console::Console<'static>>,
     );
     type Output = &'static console::Console<'static>;
@@ -260,13 +282,20 @@ impl<
 }
 #[macro_export]
 macro_rules! console_ordered_component_static {
-    ($A:ty $(,)?) => {{
-        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+    ($A:ty, $SP:ty $(,)?) => {{
         let mux_alarm = kernel::static_buf!(VirtualMuxAlarm<'static, $A>);
         let read_buf = static_buf!([u8; capsules_core::console::DEFAULT_BUF_SIZE]);
         let console_uart = kernel::static_buf!(
-            capsules_core::virtualizers::virtual_uart::UartDevice<'static, RoundRobinPolicy>
+            capsules_core::virtualizers::virtual_uart::UartDevice<'static, $SP>
         );
+        let console = kernel::static_buf!(ConsoleOrdered<'static, VirtualMuxAlarm<'static, $A>>);
+        (mux_alarm, read_buf, console_uart, console)
+    };};
+    ($A:ty $(,)?) => {{
+        let mux_alarm = kernel::static_buf!(VirtualMuxAlarm<'static, $A>);
+        let read_buf = static_buf!([u8; capsules_core::console::DEFAULT_BUF_SIZE]);
+        let console_uart =
+            kernel::static_buf!(capsules_core::virtualizers::virtual_uart::UartDevice<'static>);
         let console = kernel::static_buf!(ConsoleOrdered<'static, VirtualMuxAlarm<'static, $A>>);
         (mux_alarm, read_buf, console_uart, console)
     };};
@@ -274,11 +303,11 @@ macro_rules! console_ordered_component_static {
 
 pub struct ConsoleOrderedComponent<
     A: 'static + time::Alarm<'static>,
-    P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static,
+    SP: SelectionPolicy<&'static UartDevice<'static, SP>> + 'static,
 > {
     board_kernel: &'static kernel::Kernel,
     driver_num: usize,
-    uart_mux: &'static MuxUart<'static, P>,
+    uart_mux: &'static MuxUart<'static, SP>,
     alarm_mux: &'static MuxAlarm<'static, A>,
     atomic_size: usize,
     retry_timer: u32,
@@ -287,18 +316,18 @@ pub struct ConsoleOrderedComponent<
 
 impl<
         A: 'static + time::Alarm<'static>,
-        P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static,
-    > ConsoleOrderedComponent<A, P>
+        SP: SelectionPolicy<&'static UartDevice<'static, SP>> + 'static,
+    > ConsoleOrderedComponent<A, SP>
 {
     pub fn new(
         board_kernel: &'static kernel::Kernel,
         driver_num: usize,
-        uart_mux: &'static MuxUart<'static, P>,
+        uart_mux: &'static MuxUart<'static, SP>,
         alarm_mux: &'static MuxAlarm<'static, A>,
         atomic_size: usize,
         retry_timer: u32,
         write_timer: u32,
-    ) -> ConsoleOrderedComponent<A, P> {
+    ) -> ConsoleOrderedComponent<A, SP> {
         ConsoleOrderedComponent {
             board_kernel,
             driver_num,
@@ -313,13 +342,13 @@ impl<
 
 impl<
         A: 'static + time::Alarm<'static>,
-        P: SelectionPolicy<&'static UartDevice<'static, P>> + 'static,
-    > Component for ConsoleOrderedComponent<A, P>
+        SP: SelectionPolicy<&'static UartDevice<'static, SP>> + 'static,
+    > Component for ConsoleOrderedComponent<A, SP>
 {
     type StaticInput = (
         &'static mut MaybeUninit<VirtualMuxAlarm<'static, A>>,
         &'static mut MaybeUninit<[u8; DEFAULT_BUF_SIZE]>,
-        &'static mut MaybeUninit<UartDevice<'static, P>>,
+        &'static mut MaybeUninit<UartDevice<'static, SP>>,
         &'static mut MaybeUninit<ConsoleOrdered<'static, VirtualMuxAlarm<'static, A>>>,
     );
     type Output = &'static ConsoleOrdered<'static, VirtualMuxAlarm<'static, A>>;

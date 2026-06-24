@@ -21,6 +21,7 @@
 //! .finalize(components::rf233_component_static!(sam4l::spi::SpiHw));
 //! ```
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice;
 use capsules_extra::rf233::RF233;
 use core::mem::MaybeUninit;
@@ -32,11 +33,11 @@ use kernel::hil::{self, radio};
 // Setup static space for the objects.
 #[macro_export]
 macro_rules! rf233_component_static {
-    ($S:ty $(,)?) => {{
+    ($S:ty, $SP:ty $(,)?) => {{
         let spi_device = kernel::static_buf!(
             capsules_extra::rf233::RF233<
                 'static,
-                capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S>,
+                capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S, $SP>,
             >
         );
         // The RF233 radio stack requires four buffers for its SPI operations:
@@ -55,10 +56,17 @@ macro_rules! rf233_component_static {
 
         (spi_device, rf233_buf, rf233_reg_write, rf233_reg_read)
     };};
+    ($S:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::rf233_component_static!($S, RoundRobinPolicy)
+    };};
 }
 
-pub struct RF233Component<S: SpiMaster<'static> + 'static> {
-    spi: &'static VirtualSpiMasterDevice<'static, S>,
+pub struct RF233Component<
+    S: SpiMaster<'static> + 'static,
+    SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
+> {
+    spi: &'static VirtualSpiMasterDevice<'static, S, SP>,
     reset: &'static dyn hil::gpio::Pin,
     sleep: &'static dyn hil::gpio::Pin,
     irq: &'static dyn hil::gpio::InterruptPin<'static>,
@@ -66,9 +74,13 @@ pub struct RF233Component<S: SpiMaster<'static> + 'static> {
     channel: radio::RadioChannel,
 }
 
-impl<S: SpiMaster<'static> + 'static> RF233Component<S> {
+impl<
+        S: SpiMaster<'static> + 'static,
+        SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
+    > RF233Component<S, SP>
+{
     pub fn new(
-        spi: &'static VirtualSpiMasterDevice<'static, S>,
+        spi: &'static VirtualSpiMasterDevice<'static, S, SP>,
         reset: &'static dyn hil::gpio::Pin,
         sleep: &'static dyn hil::gpio::Pin,
         irq: &'static dyn hil::gpio::InterruptPin<'static>,
@@ -86,14 +98,18 @@ impl<S: SpiMaster<'static> + 'static> RF233Component<S> {
     }
 }
 
-impl<S: SpiMaster<'static> + 'static> Component for RF233Component<S> {
+impl<
+        S: SpiMaster<'static> + 'static,
+        SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
+    > Component for RF233Component<S, SP>
+{
     type StaticInput = (
-        &'static mut MaybeUninit<RF233<'static, VirtualSpiMasterDevice<'static, S>>>,
+        &'static mut MaybeUninit<RF233<'static, VirtualSpiMasterDevice<'static, S, SP>>>,
         &'static mut MaybeUninit<[u8; hil::radio::MAX_BUF_SIZE]>,
         &'static mut MaybeUninit<[u8; capsules_extra::rf233::SPI_REGISTER_TRANSACTION_LENGTH]>,
         &'static mut MaybeUninit<[u8; capsules_extra::rf233::SPI_REGISTER_TRANSACTION_LENGTH]>,
     );
-    type Output = &'static RF233<'static, VirtualSpiMasterDevice<'static, S>>;
+    type Output = &'static RF233<'static, VirtualSpiMasterDevice<'static, S, SP>>;
 
     fn finalize(self, s: Self::StaticInput) -> Self::Output {
         let rf233_buf = s.1.write([0; hil::radio::MAX_BUF_SIZE]);

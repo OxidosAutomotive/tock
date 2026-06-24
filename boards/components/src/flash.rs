@@ -18,6 +18,8 @@
 //!    );
 //! ```
 
+use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_flash::FlashUser;
 use capsules_core::virtualizers::virtual_flash::MuxFlash;
 use core::mem::MaybeUninit;
@@ -27,6 +29,9 @@ use kernel::hil::flash::{Flash, HasClient};
 // Setup static space for the objects.
 #[macro_export]
 macro_rules! flash_user_component_static {
+    ($F:ty, $SP:ty) => {{
+        kernel::static_buf!(capsules_core::virtualizers::virtual_flash::FlashUser<'static, $F, $SP>)
+    };};
     ($F:ty) => {{
         kernel::static_buf!(capsules_core::virtualizers::virtual_flash::FlashUser<'static, $F>)
     };};
@@ -34,50 +39,84 @@ macro_rules! flash_user_component_static {
 
 #[macro_export]
 macro_rules! flash_mux_component_static {
+    ($F:ty, $SP:ty) => {{
+        kernel::static_buf!(capsules_core::virtualizers::virtual_flash::MuxFlash<'static, $F, $SP>)
+    };};
     ($F:ty) => {{
         kernel::static_buf!(capsules_core::virtualizers::virtual_flash::MuxFlash<'static, $F>)
     };};
 }
 
-pub struct FlashMuxComponent<F: 'static + Flash + HasClient<'static, MuxFlash<'static, F>>> {
+pub struct FlashMuxComponent<
+    F: 'static + Flash + HasClient<'static, MuxFlash<'static, F, SP>>,
+    SP: 'static + SelectionPolicy<&'static FlashUser<'static, F, SP>> = RoundRobinPolicy,
+> {
     flash: &'static F,
+    selection_policy: SP,
 }
 
 impl<F: 'static + Flash + HasClient<'static, MuxFlash<'static, F>>> FlashMuxComponent<F> {
     pub fn new(flash: &'static F) -> FlashMuxComponent<F> {
-        FlashMuxComponent { flash }
+        FlashMuxComponent {
+            flash,
+            selection_policy: RoundRobinPolicy::default(),
+        }
     }
 }
 
-impl<F: 'static + Flash + HasClient<'static, MuxFlash<'static, F>>> Component
-    for FlashMuxComponent<F>
+impl<
+        F: 'static + Flash + HasClient<'static, MuxFlash<'static, F, SP>>,
+        SP: 'static + SelectionPolicy<&'static FlashUser<'static, F, SP>>,
+    > FlashMuxComponent<F, SP>
 {
-    type StaticInput = &'static mut MaybeUninit<MuxFlash<'static, F>>;
-    type Output = &'static MuxFlash<'static, F>;
+    pub fn new_with_policy(flash: &'static F, policy: SP) -> FlashMuxComponent<F, SP> {
+        FlashMuxComponent {
+            flash,
+            selection_policy: policy,
+        }
+    }
+}
+
+impl<
+        F: 'static + Flash + HasClient<'static, MuxFlash<'static, F, SP>>,
+        SP: 'static + SelectionPolicy<&'static FlashUser<'static, F, SP>>,
+    > Component for FlashMuxComponent<F, SP>
+{
+    type StaticInput = &'static mut MaybeUninit<MuxFlash<'static, F, SP>>;
+    type Output = &'static MuxFlash<'static, F, SP>;
 
     fn finalize(self, s: Self::StaticInput) -> Self::Output {
-        let mux_flash = s.write(MuxFlash::new(self.flash));
+        let mux_flash = s.write(MuxFlash::new_with_policy(self.flash, self.selection_policy));
         HasClient::set_client(self.flash, mux_flash);
 
         mux_flash
     }
 }
 
-pub struct FlashUserComponent<F: 'static + Flash + HasClient<'static, MuxFlash<'static, F>>> {
-    mux_flash: &'static MuxFlash<'static, F>,
+pub struct FlashUserComponent<
+    F: 'static + Flash + HasClient<'static, MuxFlash<'static, F, SP>>,
+    SP: 'static + SelectionPolicy<&'static FlashUser<'static, F, SP>>,
+> {
+    mux_flash: &'static MuxFlash<'static, F, SP>,
 }
 
-impl<F: 'static + Flash + HasClient<'static, MuxFlash<'static, F>>> FlashUserComponent<F> {
-    pub fn new(mux_flash: &'static MuxFlash<'static, F>) -> Self {
+impl<
+        F: 'static + Flash + HasClient<'static, MuxFlash<'static, F, SP>>,
+        SP: 'static + SelectionPolicy<&'static FlashUser<'static, F, SP>>,
+    > FlashUserComponent<F, SP>
+{
+    pub fn new(mux_flash: &'static MuxFlash<'static, F, SP>) -> Self {
         Self { mux_flash }
     }
 }
 
-impl<F: 'static + Flash + HasClient<'static, MuxFlash<'static, F>>> Component
-    for FlashUserComponent<F>
+impl<
+        F: 'static + Flash + HasClient<'static, MuxFlash<'static, F, SP>>,
+        SP: 'static + SelectionPolicy<&'static FlashUser<'static, F, SP>>,
+    > Component for FlashUserComponent<F, SP>
 {
-    type StaticInput = &'static mut MaybeUninit<FlashUser<'static, F>>;
-    type Output = &'static FlashUser<'static, F>;
+    type StaticInput = &'static mut MaybeUninit<FlashUser<'static, F, SP>>;
+    type Output = &'static FlashUser<'static, F, SP>;
 
     fn finalize(self, s: Self::StaticInput) -> Self::Output {
         s.write(FlashUser::new(self.mux_flash))

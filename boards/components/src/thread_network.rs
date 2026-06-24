@@ -26,7 +26,8 @@
 //!         ));
 //! ```
 
-use capsules_core::virtualizers::virtual_aes_ccm::MuxAES128CCM;
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
+use capsules_core::virtualizers::virtual_aes_ccm::{MuxAES128CCM, VirtualAES128CCM};
 use capsules_core::virtualizers::virtual_alarm::VirtualMuxAlarm;
 use capsules_extra::net::ipv6::ipv6_send::IP6SendStruct;
 use capsules_extra::net::network_capabilities::{
@@ -54,7 +55,7 @@ pub const CRYPT_SIZE: usize = 3 * symmetric_encryption::AES128_BLOCK_SIZE + radi
 // Setup static space for the objects.
 #[macro_export]
 macro_rules! thread_network_component_static {
-    ($A:ty, $B:ty $(,)?) => {{
+    ($A:ty, $B:ty, $SP:ty $(,)?) => {{
         use components::udp_mux::MAX_PAYLOAD_LEN;
 
         let udp_send = kernel::static_buf!(
@@ -82,7 +83,7 @@ macro_rules! thread_network_component_static {
             kernel::static_buf!(capsules_extra::net::udp::udp_recv::UDPReceiver<'static>);
         let crypt_buf = kernel::static_buf!([u8; components::ieee802154::CRYPT_SIZE]);
         let crypt = kernel::static_buf!(
-            capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, $B>,
+            capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, $B, $SP>,
         );
         let alarm = kernel::static_buf!(VirtualMuxAlarm<'static, $A>);
 
@@ -99,10 +100,15 @@ macro_rules! thread_network_component_static {
             alarm,
         )
     };};
+    ($A:ty, $B:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::thread_network_component_static!($A, $B, RoundRobinPolicy)
+    };};
 }
 pub struct ThreadNetworkComponent<
     A: Alarm<'static> + 'static,
     B: AES128<'static> + AES128Ctr + AES128CBC + AES128ECB + 'static,
+    SP: SelectionPolicy<&'static VirtualAES128CCM<'static, B, SP>> + 'static,
 > {
     board_kernel: &'static kernel::Kernel,
     driver_num: usize,
@@ -110,7 +116,7 @@ pub struct ThreadNetworkComponent<
         &'static MuxUdpSender<'static, IP6SendStruct<'static, VirtualMuxAlarm<'static, A>>>,
     udp_recv_mux: &'static MuxUdpReceiver<'static>,
     port_table: &'static UdpPortManager,
-    aes_mux: &'static MuxAES128CCM<'static, B>,
+    aes_mux: &'static MuxAES128CCM<'static, B, SP>,
     serial_num: [u8; 8],
     alarm_mux: &'static MuxAlarm<'static, A>,
 }
@@ -118,7 +124,8 @@ pub struct ThreadNetworkComponent<
 impl<
         A: Alarm<'static> + 'static,
         B: AES128<'static> + AES128Ctr + AES128CBC + AES128ECB + 'static,
-    > ThreadNetworkComponent<A, B>
+        SP: SelectionPolicy<&'static VirtualAES128CCM<'static, B, SP>> + 'static,
+    > ThreadNetworkComponent<A, B, SP>
 {
     pub fn new(
         board_kernel: &'static kernel::Kernel,
@@ -129,7 +136,7 @@ impl<
         >,
         udp_recv_mux: &'static MuxUdpReceiver<'static>,
         port_table: &'static UdpPortManager,
-        aes_mux: &'static MuxAES128CCM<'static, B>,
+        aes_mux: &'static MuxAES128CCM<'static, B, SP>,
         serial_num: [u8; 8],
         alarm_mux: &'static MuxAlarm<'static, A>,
     ) -> Self {
@@ -149,7 +156,8 @@ impl<
 impl<
         A: Alarm<'static> + 'static,
         B: AES128<'static> + AES128Ctr + AES128CBC + AES128ECB + 'static,
-    > Component for ThreadNetworkComponent<A, B>
+        SP: SelectionPolicy<&'static VirtualAES128CCM<'static, B, SP>> + 'static,
+    > Component for ThreadNetworkComponent<A, B, SP>
 {
     type StaticInput = (
         &'static mut MaybeUninit<
@@ -176,7 +184,7 @@ impl<
         &'static mut MaybeUninit<UDPReceiver<'static>>,
         &'static mut MaybeUninit<[u8; CRYPT_SIZE]>,
         &'static mut MaybeUninit<
-            capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, B>,
+            capsules_core::virtualizers::virtual_aes_ccm::VirtualAES128CCM<'static, B, SP>,
         >,
         &'static mut MaybeUninit<VirtualMuxAlarm<'static, A>>,
     );

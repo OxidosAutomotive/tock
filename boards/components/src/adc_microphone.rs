@@ -30,6 +30,7 @@
 //! ));
 //! ```
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_adc::AdcDevice;
 use capsules_extra::adc_microphone::AdcMicrophone;
 use core::mem::MaybeUninit;
@@ -52,21 +53,26 @@ macro_rules! adc_microphone_component_static {
 pub struct AdcMicrophoneComponent<
     A: 'static + adc::Adc<'static>,
     P: 'static + gpio::Pin,
+    SP: 'static + SelectionPolicy<&'static AdcDevice<'static, A, SP>>,
     const BUF_LEN: usize,
 > {
-    adc_mux: &'static capsules_core::virtualizers::virtual_adc::MuxAdc<'static, A>,
+    adc_mux: &'static capsules_core::virtualizers::virtual_adc::MuxAdc<'static, A, SP>,
     adc_channel: A::Channel,
     pin: Option<&'static P>,
 }
 
-impl<A: 'static + adc::Adc<'static>, P: 'static + gpio::Pin, const BUF_LEN: usize>
-    AdcMicrophoneComponent<A, P, BUF_LEN>
+impl<
+        A: 'static + adc::Adc<'static>,
+        P: 'static + gpio::Pin,
+        SP: 'static + SelectionPolicy<&'static AdcDevice<'static, A, SP>>,
+        const BUF_LEN: usize,
+    > AdcMicrophoneComponent<A, P, SP, BUF_LEN>
 {
     pub fn new(
-        adc_mux: &'static capsules_core::virtualizers::virtual_adc::MuxAdc<'static, A>,
+        adc_mux: &'static capsules_core::virtualizers::virtual_adc::MuxAdc<'static, A, SP>,
         adc_channel: A::Channel,
         pin: Option<&'static P>,
-    ) -> AdcMicrophoneComponent<A, P, BUF_LEN> {
+    ) -> AdcMicrophoneComponent<A, P, SP, BUF_LEN> {
         AdcMicrophoneComponent {
             adc_mux,
             adc_channel,
@@ -75,11 +81,15 @@ impl<A: 'static + adc::Adc<'static>, P: 'static + gpio::Pin, const BUF_LEN: usiz
     }
 }
 
-impl<A: 'static + adc::Adc<'static>, P: 'static + gpio::Pin, const BUF_LEN: usize> Component
-    for AdcMicrophoneComponent<A, P, BUF_LEN>
+impl<
+        A: 'static + adc::Adc<'static>,
+        P: 'static + gpio::Pin,
+        SP: 'static + SelectionPolicy<&'static AdcDevice<'static, A, SP>>,
+        const BUF_LEN: usize,
+    > Component for AdcMicrophoneComponent<A, P, SP, BUF_LEN>
 {
     type StaticInput = (
-        &'static mut MaybeUninit<AdcDevice<'static, A>>,
+        &'static mut MaybeUninit<AdcDevice<'static, A, SP>>,
         &'static mut MaybeUninit<[u16; BUF_LEN]>,
         &'static mut MaybeUninit<AdcMicrophone<'static, P>>,
     );

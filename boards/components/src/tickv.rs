@@ -45,6 +45,7 @@
 //!    hil::flash::HasClient::set_client(&peripherals.flash_ctrl, mux_flash);
 //! ```
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_flash::FlashUser;
 use capsules_core::virtualizers::virtual_flash::MuxFlash;
 use capsules_extra::tickv::TicKVSystem;
@@ -59,19 +60,24 @@ use kernel::hil::hasher::Hasher;
 // Setup static space for the objects.
 #[macro_export]
 macro_rules! tickv_component_static {
-    ($F:ty, $H:ty, $PAGE_SIZE:expr $(,)?) => {{
-        let flash =
-            kernel::static_buf!(capsules_core::virtualizers::virtual_flash::FlashUser<'static, $F>);
+    ($F:ty, $H:ty, $SP:ty, $PAGE_SIZE:expr $(,)?) => {{
+        let flash = kernel::static_buf!(
+            capsules_core::virtualizers::virtual_flash::FlashUser<'static, $F, $SP>
+        );
         let tickv = kernel::static_buf!(
             capsules_extra::tickv::TicKVSystem<
                 'static,
-                capsules_core::virtualizers::virtual_flash::FlashUser<'static, $F>,
+                capsules_core::virtualizers::virtual_flash::FlashUser<'static, $F, $SP>,
                 $H,
                 $PAGE_SIZE,
             >
         );
 
         (flash, tickv)
+    };};
+    ($F:ty, $H:ty, $PAGE_SIZE:expr $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::tickv_component_static!($F, $H, RoundRobinPolicy, $PAGE_SIZE)
     };};
 }
 
@@ -89,9 +95,10 @@ macro_rules! tickv_dedicated_flash_component_static {
 pub struct TicKVComponent<
     F: 'static + hil::flash::Flash + hil::flash::HasClient<'static, MuxFlash<'static, F>>,
     H: 'static + Hasher<'static, 8>,
+    SP: 'static + SelectionPolicy<&'static FlashUser<'static, F, SP>>,
     const PAGE_SIZE: usize,
 > {
-    mux_flash: &'static MuxFlash<'static, F>,
+    mux_flash: &'static MuxFlash<'static, F, SP>,
     hasher: &'static H,
     region_offset: usize,
     flash_size: usize,
@@ -102,12 +109,13 @@ pub struct TicKVComponent<
 impl<
         F: 'static + hil::flash::Flash + hil::flash::HasClient<'static, MuxFlash<'static, F>>,
         H: Hasher<'static, 8>,
+        SP: 'static + SelectionPolicy<&'static FlashUser<'static, F, SP>>,
         const PAGE_SIZE: usize,
-    > TicKVComponent<F, H, PAGE_SIZE>
+    > TicKVComponent<F, H, SP, PAGE_SIZE>
 {
     pub fn new(
         hasher: &'static H,
-        mux_flash: &'static MuxFlash<'static, F>,
+        mux_flash: &'static MuxFlash<'static, F, SP>,
         region_offset: usize,
         flash_size: usize,
         tickfs_read_buf: &'static mut [u8; PAGE_SIZE],
@@ -127,14 +135,15 @@ impl<
 impl<
         F: 'static + hil::flash::Flash + hil::flash::HasClient<'static, MuxFlash<'static, F>>,
         H: 'static + Hasher<'static, 8>,
+        SP: 'static + SelectionPolicy<&'static FlashUser<'static, F, SP>>,
         const PAGE_SIZE: usize,
-    > Component for TicKVComponent<F, H, PAGE_SIZE>
+    > Component for TicKVComponent<F, H, SP, PAGE_SIZE>
 {
     type StaticInput = (
-        &'static mut MaybeUninit<FlashUser<'static, F>>,
-        &'static mut MaybeUninit<TicKVSystem<'static, FlashUser<'static, F>, H, PAGE_SIZE>>,
+        &'static mut MaybeUninit<FlashUser<'static, F, SP>>,
+        &'static mut MaybeUninit<TicKVSystem<'static, FlashUser<'static, F, SP>, H, PAGE_SIZE>>,
     );
-    type Output = &'static TicKVSystem<'static, FlashUser<'static, F>, H, PAGE_SIZE>;
+    type Output = &'static TicKVSystem<'static, FlashUser<'static, F, SP>, H, PAGE_SIZE>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let _grant_cap = create_capability!(capabilities::MemoryAllocationCapability);
