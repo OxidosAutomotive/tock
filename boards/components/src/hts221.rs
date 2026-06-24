@@ -13,39 +13,51 @@
 //! let humidity = components::humidity::HumidityComponent::new(board_kernel, hts221).finalize(());
 //! ```
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_i2c::{I2CDevice, MuxI2C};
 use capsules_extra::hts221::Hts221;
 use core::mem::MaybeUninit;
 use kernel::component::Component;
-use kernel::hil::i2c;
+use kernel::hil::i2c::{self, NoSMBus};
 
 // Setup static space for the objects.
 #[macro_export]
 macro_rules! hts221_component_static {
-    ($I:ty $(,)?) => {{
+    ($I:ty, $SP:ty $(,)?) => {{
         let i2c_device =
-            kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::I2CDevice<$I>);
+            kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::I2CDevice<$I, $SP>);
         let buffer = kernel::static_buf!([u8; 17]);
         let hts221 = kernel::static_buf!(
             capsules_extra::hts221::Hts221<
                 'static,
-                capsules_core::virtualizers::virtual_i2c::I2CDevice<$I>,
+                capsules_core::virtualizers::virtual_i2c::I2CDevice<$I, $SP>,
             >
         );
 
         (i2c_device, buffer, hts221)
     };};
+    ($I:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::hts221_component_static!($I, RoundRobinPolicy)
+    };};
 }
 
 pub type Hts221ComponentType<I> = capsules_extra::hts221::Hts221<'static, I>;
 
-pub struct Hts221Component<I: 'static + i2c::I2CMaster<'static>> {
-    i2c_mux: &'static MuxI2C<'static, I>,
+pub struct Hts221Component<
+    I: 'static + i2c::I2CMaster<'static>,
+    SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+> {
+    i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SP>,
     i2c_address: u8,
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>> Hts221Component<I> {
-    pub fn new(i2c: &'static MuxI2C<'static, I>, i2c_address: u8) -> Self {
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > Hts221Component<I, SP>
+{
+    pub fn new(i2c: &'static MuxI2C<'static, I, NoSMBus, SP>, i2c_address: u8) -> Self {
         Hts221Component {
             i2c_mux: i2c,
             i2c_address,
@@ -53,13 +65,17 @@ impl<I: 'static + i2c::I2CMaster<'static>> Hts221Component<I> {
     }
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>> Component for Hts221Component<I> {
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > Component for Hts221Component<I, SP>
+{
     type StaticInput = (
-        &'static mut MaybeUninit<I2CDevice<'static, I>>,
+        &'static mut MaybeUninit<I2CDevice<'static, I, SP>>,
         &'static mut MaybeUninit<[u8; 17]>,
-        &'static mut MaybeUninit<Hts221<'static, I2CDevice<'static, I>>>,
+        &'static mut MaybeUninit<Hts221<'static, I2CDevice<'static, I, SP>>>,
     );
-    type Output = &'static Hts221<'static, I2CDevice<'static, I>>;
+    type Output = &'static Hts221<'static, I2CDevice<'static, I, SP>>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let hts221_i2c = static_buffer

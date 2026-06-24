@@ -27,19 +27,21 @@
 //! bmp280.begin_reset();
 //! ```
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use capsules_core::virtualizers::virtual_i2c::{I2CDevice, MuxI2C};
 use capsules_extra::bmp280::Bmp280;
 use core::mem::MaybeUninit;
 use kernel::component::Component;
-use kernel::hil::i2c;
+use kernel::hil::i2c::{self, NoSMBus};
 use kernel::hil::time::Alarm;
 
 #[macro_export]
 macro_rules! bmp280_component_static {
-    ($A:ty, $I:ty $(,)?) => {{
-        let i2c_device =
-            kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I>);
+    ($A:ty, $I:ty, $SP:ty $(,)?) => {{
+        let i2c_device = kernel::static_buf!(
+            capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I, $SP>
+        );
         let alarm = kernel::static_buf!(
             capsules_core::virtualizers::virtual_alarm::VirtualMuxAlarm<'static, $A>
         );
@@ -48,28 +50,41 @@ macro_rules! bmp280_component_static {
             capsules_extra::bmp280::Bmp280<
                 'static,
                 VirtualMuxAlarm<'static, $A>,
-                capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I>,
+                capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I, $SP>,
             >
         );
 
         (i2c_device, alarm, buffer, bmp280)
     };};
+    ($A:ty, $I:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::bmp280_component_static!($A, $I, RoundRobinPolicy)
+    };};
 }
 
 pub type Bmp280ComponentType<A, I> = capsules_extra::bmp280::Bmp280<'static, A, I>;
 
-pub struct Bmp280Component<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> {
-    i2c_mux: &'static MuxI2C<'static, I>,
+pub struct Bmp280Component<
+    A: 'static + Alarm<'static>,
+    I: 'static + i2c::I2CMaster<'static>,
+    SPI: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SPI>>,
+> {
+    i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SPI>,
     i2c_address: u8,
     alarm_mux: &'static MuxAlarm<'static, A>,
 }
 
-impl<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> Bmp280Component<A, I> {
+impl<
+        A: 'static + Alarm<'static>,
+        I: 'static + i2c::I2CMaster<'static>,
+        SPI: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SPI>>,
+    > Bmp280Component<A, I, SPI>
+{
     pub fn new(
-        i2c_mux: &'static MuxI2C<'static, I>,
+        i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SPI>,
         i2c_address: u8,
         alarm_mux: &'static MuxAlarm<'static, A>,
-    ) -> Bmp280Component<A, I> {
+    ) -> Bmp280Component<A, I, SPI> {
         Bmp280Component {
             i2c_mux,
             i2c_address,
@@ -78,18 +93,21 @@ impl<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> Bmp280Co
     }
 }
 
-impl<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> Component
-    for Bmp280Component<A, I>
+impl<
+        A: 'static + Alarm<'static>,
+        I: 'static + i2c::I2CMaster<'static>,
+        SPI: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SPI>>,
+    > Component for Bmp280Component<A, I, SPI>
 {
     type StaticInput = (
-        &'static mut MaybeUninit<I2CDevice<'static, I>>,
+        &'static mut MaybeUninit<I2CDevice<'static, I, SPI>>,
         &'static mut MaybeUninit<VirtualMuxAlarm<'static, A>>,
         &'static mut MaybeUninit<[u8; capsules_extra::bmp280::BUFFER_SIZE]>,
         &'static mut MaybeUninit<
-            Bmp280<'static, VirtualMuxAlarm<'static, A>, I2CDevice<'static, I>>,
+            Bmp280<'static, VirtualMuxAlarm<'static, A>, I2CDevice<'static, I, SPI>>,
         >,
     );
-    type Output = &'static Bmp280<'static, VirtualMuxAlarm<'static, A>, I2CDevice<'static, I>>;
+    type Output = &'static Bmp280<'static, VirtualMuxAlarm<'static, A>, I2CDevice<'static, I, SPI>>;
 
     fn finalize(self, s: Self::StaticInput) -> Self::Output {
         let bmp280_i2c = s.0.write(I2CDevice::new(self.i2c_mux, self.i2c_address));

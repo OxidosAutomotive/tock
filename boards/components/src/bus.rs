@@ -32,7 +32,7 @@ use capsules_extra::bus::{Bus8080Bus, I2CMasterBus, SpiMasterBus};
 use core::mem::MaybeUninit;
 use kernel::component::Component;
 use kernel::hil::bus8080;
-use kernel::hil::i2c;
+use kernel::hil::i2c::{self, NoSMBus};
 use kernel::hil::spi::{self, ClockPhase, ClockPolarity, SpiMasterDevice};
 
 // Setup static space for the objects.
@@ -45,43 +45,57 @@ macro_rules! bus8080_bus_component_static {
 
 #[macro_export]
 macro_rules! spi_bus_component_static {
-    ($S:ty $(,)?) => {{
+    ($S:ty, $SP:ty $(,)?) => {{
         let spi = kernel::static_buf!(
-            capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S>
+            capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S, $SP>
         );
         let address_buffer = kernel::static_buf!([u8; core::mem::size_of::<usize>()]);
         let bus = kernel::static_buf!(
             capsules_extra::bus::SpiMasterBus<
                 'static,
-                capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S>,
+                capsules_core::virtualizers::virtual_spi::VirtualSpiMasterDevice<'static, $S, $SP>,
             >
         );
 
         (spi, bus, address_buffer)
+    };};
+    ($S:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::spi_bus_component_static!($S, RoundRobinPolicy)
     };};
 }
 
 #[macro_export]
 macro_rules! i2c_master_bus_component_static {
     ($D:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::i2c_master_bus_component_static!($D, RoundRobinPolicy)
+    };};
+    ($D:ty, policy: $SP:ty $(,)?) => {{
         let address_buffer = kernel::static_buf!([u8; 1]);
         let bus = kernel::static_buf!(capsules_extra::bus::I2CMasterBus<'static, $D>);
         let i2c_device = kernel::static_buf!(
             capsules_core::virtualizers::virtual_i2c::I2CDevice<
                 'static,
                 capsules_extra::bus::I2CMasterBus<'static, $D>,
+                $SP,
             >
         );
 
         (bus, i2c_device, address_buffer)
     };};
     ($D:ty, $P:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::i2c_master_bus_component_static!($D, $P, RoundRobinPolicy)
+    };};
+    ($D:ty, $P:ty, $SP:ty $(,)?) => {{
         let address_buffer = kernel::static_buf!([u8; 1]);
         let bus = kernel::static_buf!(capsules_extra::bus::I2CMasterBus<'static, $D, $P>);
         let i2c_device = kernel::static_buf!(
             capsules_core::virtualizers::virtual_i2c::I2CDevice<
                 'static,
                 capsules_extra::bus::I2CMasterBus<'static, $D, $P>,
+                $SP,
             >
         );
 
@@ -113,9 +127,9 @@ impl<B: 'static + bus8080::Bus8080<'static>> Component for Bus8080BusComponent<B
 
 pub struct SpiMasterBusComponent<
     S: 'static + spi::SpiMaster<'static>,
-    P: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, P>>,
+    SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
 > {
-    spi_mux: &'static MuxSpiMaster<'static, S, P>,
+    spi_mux: &'static MuxSpiMaster<'static, S, SP>,
     chip_select: S::ChipSelect,
     baud_rate: u32,
     clock_phase: ClockPhase,
@@ -124,16 +138,16 @@ pub struct SpiMasterBusComponent<
 
 impl<
         S: 'static + spi::SpiMaster<'static>,
-        P: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, P>>,
-    > SpiMasterBusComponent<S, P>
+        SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
+    > SpiMasterBusComponent<S, SP>
 {
     pub fn new(
-        spi_mux: &'static MuxSpiMaster<'static, S, P>,
+        spi_mux: &'static MuxSpiMaster<'static, S, SP>,
         chip_select: S::ChipSelect,
         baud_rate: u32,
         clock_phase: ClockPhase,
         clock_polarity: ClockPolarity,
-    ) -> SpiMasterBusComponent<S, P> {
+    ) -> SpiMasterBusComponent<S, SP> {
         SpiMasterBusComponent {
             spi_mux,
             chip_select,
@@ -146,15 +160,15 @@ impl<
 
 impl<
         S: 'static + spi::SpiMaster<'static>,
-        P: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, P>>,
-    > Component for SpiMasterBusComponent<S, P>
+        SP: 'static + SelectionPolicy<&'static VirtualSpiMasterDevice<'static, S, SP>>,
+    > Component for SpiMasterBusComponent<S, SP>
 {
     type StaticInput = (
-        &'static mut MaybeUninit<VirtualSpiMasterDevice<'static, S, P>>,
-        &'static mut MaybeUninit<SpiMasterBus<'static, VirtualSpiMasterDevice<'static, S, P>>>,
+        &'static mut MaybeUninit<VirtualSpiMasterDevice<'static, S, SP>>,
+        &'static mut MaybeUninit<SpiMasterBus<'static, VirtualSpiMasterDevice<'static, S, SP>>>,
         &'static mut MaybeUninit<[u8; core::mem::size_of::<usize>()]>,
     );
-    type Output = &'static SpiMasterBus<'static, VirtualSpiMasterDevice<'static, S, P>>;
+    type Output = &'static SpiMasterBus<'static, VirtualSpiMasterDevice<'static, S, SP>>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let spi_device = static_buffer
@@ -177,24 +191,38 @@ impl<
     }
 }
 
-pub struct I2CMasterBusComponent<I: 'static + i2c::I2CMaster<'static>> {
-    i2c_mux: &'static MuxI2C<'static, I>,
+pub struct I2CMasterBusComponent<
+    I: 'static + i2c::I2CMaster<'static>,
+    SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+> {
+    i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SP>,
     address: u8,
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>> I2CMasterBusComponent<I> {
-    pub fn new(i2c_mux: &'static MuxI2C<'static, I>, address: u8) -> I2CMasterBusComponent<I> {
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > I2CMasterBusComponent<I, SP>
+{
+    pub fn new(
+        i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SP>,
+        address: u8,
+    ) -> I2CMasterBusComponent<I, SP> {
         I2CMasterBusComponent { i2c_mux, address }
     }
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>> Component for I2CMasterBusComponent<I> {
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > Component for I2CMasterBusComponent<I, SP>
+{
     type StaticInput = (
-        &'static mut MaybeUninit<I2CMasterBus<'static, I2CDevice<'static, I>>>,
-        &'static mut MaybeUninit<I2CDevice<'static, I>>,
+        &'static mut MaybeUninit<I2CMasterBus<'static, I2CDevice<'static, I, SP>>>,
+        &'static mut MaybeUninit<I2CDevice<'static, I, SP>>,
         &'static mut MaybeUninit<[u8; 1]>,
     );
-    type Output = &'static I2CMasterBus<'static, I2CDevice<'static, I>>;
+    type Output = &'static I2CMasterBus<'static, I2CDevice<'static, I, SP>>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let i2c_device = static_buffer

@@ -4,12 +4,13 @@
 
 //! Component for APDS9960 proximity sensor.
 
+use capsules_core::virtualizers::selection_policy::{RoundRobinPolicy, SelectionPolicy};
 use capsules_core::virtualizers::virtual_i2c::{I2CDevice, MuxI2C};
 use capsules_extra::apds9960::APDS9960;
 use core::mem::MaybeUninit;
 use kernel::component::Component;
 use kernel::hil::gpio;
-use kernel::hil::i2c;
+use kernel::hil::i2c::{self, NoSMBus};
 
 #[macro_export]
 macro_rules! apds9960_component_static {
@@ -28,15 +29,22 @@ macro_rules! apds9960_component_static {
     };};
 }
 
-pub struct Apds9960Component<I: 'static + i2c::I2CMaster<'static>> {
-    i2c_mux: &'static MuxI2C<'static, I>,
+pub struct Apds9960Component<
+    I: 'static + i2c::I2CMaster<'static>,
+    SPI: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SPI>> = RoundRobinPolicy,
+> {
+    i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SPI>,
     i2c_address: u8,
     interrupt_pin: &'static dyn gpio::InterruptPin<'static>,
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>> Apds9960Component<I> {
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        SPI: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SPI>>,
+    > Apds9960Component<I, SPI>
+{
     pub fn new(
-        i2c_mux: &'static MuxI2C<'static, I>,
+        i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SPI>,
         i2c_address: u8,
         interrupt_pin: &'static dyn gpio::InterruptPin<'static>,
     ) -> Self {
@@ -48,13 +56,17 @@ impl<I: 'static + i2c::I2CMaster<'static>> Apds9960Component<I> {
     }
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>> Component for Apds9960Component<I> {
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        SPI: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SPI>>,
+    > Component for Apds9960Component<I, SPI>
+{
     type StaticInput = (
-        &'static mut MaybeUninit<I2CDevice<'static, I>>,
-        &'static mut MaybeUninit<APDS9960<'static, I2CDevice<'static, I>>>,
+        &'static mut MaybeUninit<I2CDevice<'static, I, SPI>>,
+        &'static mut MaybeUninit<APDS9960<'static, I2CDevice<'static, I, SPI>>>,
         &'static mut MaybeUninit<[u8; capsules_extra::apds9960::BUF_LEN]>,
     );
-    type Output = &'static APDS9960<'static, I2CDevice<'static, I>>;
+    type Output = &'static APDS9960<'static, I2CDevice<'static, I, SPI>>;
 
     fn finalize(self, s: Self::StaticInput) -> Self::Output {
         let apds9960_i2c = s.0.write(I2CDevice::new(self.i2c_mux, self.i2c_address));

@@ -4,6 +4,7 @@
 
 //! Component for LPS25HB pressure sensor.
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_i2c::{I2CDevice, MuxI2C};
 use capsules_extra::lps25hb::LPS25HB;
 use core::mem::MaybeUninit;
@@ -11,36 +12,48 @@ use kernel::capabilities;
 use kernel::component::Component;
 use kernel::create_capability;
 use kernel::hil::gpio;
-use kernel::hil::i2c;
+use kernel::hil::i2c::{self, NoSMBus};
 
 #[macro_export]
 macro_rules! lps25hb_component_static {
-    ($I:ty $(,)?) => {{
-        let i2c_device =
-            kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::I2CDevice<'static>);
+    ($I:ty, $SP:ty $(,)?) => {{
+        let i2c_device = kernel::static_buf!(
+            capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I, $SP>
+        );
         let lps25hb = kernel::static_buf!(
             capsules_extra::lps25hb::LPS25HB<
                 'static,
-                capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I>,
+                capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I, $SP>,
             >
         );
         let buffer = kernel::static_buf!([u8; capsules_extra::lps25hb::BUF_LEN]);
 
         (i2c_device, lps25hb, buffer)
     };};
+    ($I:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::lps25hb_component_static!($I, RoundRobinPolicy)
+    };};
 }
 
-pub struct Lps25hbComponent<I: 'static + i2c::I2CMaster<'static>> {
-    i2c_mux: &'static MuxI2C<'static, I>,
+pub struct Lps25hbComponent<
+    I: 'static + i2c::I2CMaster<'static>,
+    SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+> {
+    i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SP>,
     i2c_address: u8,
     interrupt_pin: &'static dyn gpio::InterruptPin<'static>,
     board_kernel: &'static kernel::Kernel,
     driver_num: usize,
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>> Lps25hbComponent<I> {
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > Lps25hbComponent<I, SP>
+{
     pub fn new(
-        i2c_mux: &'static MuxI2C<'static, I>,
+        i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SP>,
         i2c_address: u8,
         interrupt_pin: &'static dyn gpio::InterruptPin<'static>,
         board_kernel: &'static kernel::Kernel,
@@ -56,13 +69,17 @@ impl<I: 'static + i2c::I2CMaster<'static>> Lps25hbComponent<I> {
     }
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>> Component for Lps25hbComponent<I> {
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > Component for Lps25hbComponent<I, SP>
+{
     type StaticInput = (
-        &'static mut MaybeUninit<I2CDevice<'static, I>>,
-        &'static mut MaybeUninit<LPS25HB<'static, I2CDevice<'static, I>>>,
+        &'static mut MaybeUninit<I2CDevice<'static, I, SP>>,
+        &'static mut MaybeUninit<LPS25HB<'static, I2CDevice<'static, I, SP>>>,
         &'static mut MaybeUninit<[u8; capsules_extra::lps25hb::BUF_LEN]>,
     );
-    type Output = &'static LPS25HB<'static, I2CDevice<'static, I>>;
+    type Output = &'static LPS25HB<'static, I2CDevice<'static, I, SP>>;
 
     fn finalize(self, s: Self::StaticInput) -> Self::Output {
         let grant_cap = create_capability!(capabilities::MemoryAllocationCapability);

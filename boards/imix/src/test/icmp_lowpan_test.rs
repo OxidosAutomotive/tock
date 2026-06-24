@@ -14,6 +14,7 @@
 //! test::icmp_lowpan_test::run(mux_mac, mux_alarm);
 //! ```
 
+use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
 use capsules_extra::ieee802154::device::MacDevice;
 use capsules_extra::net::icmpv6::icmpv6_send::{ICMP6SendStruct, ICMP6Sender};
 use capsules_extra::net::icmpv6::{ICMP6Header, ICMP6Type};
@@ -75,8 +76,11 @@ type Rf233 = capsules_extra::rf233::RF233<
         sam4l::spi::SpiHw<'static>,
     >,
 >;
-type Ieee802154MacDevice =
-    components::ieee802154::Ieee802154ComponentMacDeviceType<Rf233, sam4l::aes::Aes<'static>>;
+type Ieee802154MacDevice = components::ieee802154::Ieee802154ComponentMacDeviceType<
+    Rf233,
+    sam4l::aes::Aes<'static>,
+    RoundRobinPolicy,
+>;
 
 pub unsafe fn run(
     mux_mac: &'static capsules_extra::ieee802154::virtual_mac::MuxMac<'static, Ieee802154MacDevice>,

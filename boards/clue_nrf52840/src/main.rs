@@ -12,6 +12,7 @@
 
 use core::ptr::addr_of;
 
+use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
 use capsules_core::virtualizers::virtual_aes_ccm::MuxAES128CCM;
 
 use kernel::capabilities;
@@ -152,6 +153,7 @@ type RngDriver = components::rng::RngComponentType<nrf52840::trng::Trng<'static>
 type Ieee802154Driver = components::ieee802154::Ieee802154ComponentType<
     nrf52840::ieee802154_radio::Radio<'static>,
     nrf52840::aes::AesECB<'static>,
+    RoundRobinPolicy,
 >;
 
 type SchedulerInUse = components::sched::round_robin::RoundRobinComponentType;

@@ -20,6 +20,7 @@
 // Author: Philip Levis <pal@cs.stanford.edu>
 // Last modified: 6/03/2020
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_i2c::{I2CDevice, MuxI2C};
 use capsules_extra::fxos8700cq::Fxos8700cq;
 
@@ -28,32 +29,43 @@ use kernel::component::Component;
 use core::mem::MaybeUninit;
 use kernel::hil;
 use kernel::hil::gpio;
-use kernel::hil::i2c;
+use kernel::hil::i2c::{self, NoSMBus};
 
 #[macro_export]
 macro_rules! fxos8700_component_static {
-    ($I:ty $(,)?) => {{
+    ($I:ty, $SP:ty $(,)?) => {{
         let i2c_device =
-            kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::I2CDevice<$I>);
+            kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::I2CDevice<$I, $SP>);
         let buffer = kernel::static_buf!([u8; capsules_extra::fxos8700cq::BUF_LEN]);
         let fxo = kernel::static_buf!(capsules_extra::fxos8700cq::Fxos8700cq<'static>);
 
         (i2c_device, buffer, fxo)
     };};
+    ($I:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::fxos8700_component_static!($I, RoundRobinPolicy)
+    };};
 }
 
-pub struct Fxos8700Component<I: 'static + i2c::I2CMaster<'static>> {
-    i2c_mux: &'static MuxI2C<'static, I>,
+pub struct Fxos8700Component<
+    I: 'static + i2c::I2CMaster<'static>,
+    SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+> {
+    i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SP>,
     i2c_address: u8,
     gpio: &'static dyn gpio::InterruptPin<'static>,
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>> Fxos8700Component<I> {
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > Fxos8700Component<I, SP>
+{
     pub fn new(
-        i2c: &'static MuxI2C<'static, I>,
+        i2c: &'static MuxI2C<'static, I, NoSMBus, SP>,
         i2c_address: u8,
         gpio: &'static dyn hil::gpio::InterruptPin<'static>,
-    ) -> Fxos8700Component<I> {
+    ) -> Fxos8700Component<I, SP> {
         Fxos8700Component {
             i2c_mux: i2c,
             i2c_address,
@@ -62,9 +74,13 @@ impl<I: 'static + i2c::I2CMaster<'static>> Fxos8700Component<I> {
     }
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>> Component for Fxos8700Component<I> {
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > Component for Fxos8700Component<I, SP>
+{
     type StaticInput = (
-        &'static mut MaybeUninit<I2CDevice<'static, I>>,
+        &'static mut MaybeUninit<I2CDevice<'static, I, SP>>,
         &'static mut MaybeUninit<[u8; capsules_extra::fxos8700cq::BUF_LEN]>,
         &'static mut MaybeUninit<Fxos8700cq<'static>>,
     );

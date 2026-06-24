@@ -16,21 +16,23 @@
 //! sht3x.reset();
 //! ```
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use capsules_core::virtualizers::virtual_i2c::{I2CDevice, MuxI2C};
 use capsules_extra::sht3x::SHT3x;
 use core::mem::MaybeUninit;
 use kernel::component::Component;
-use kernel::hil::i2c;
+use kernel::hil::i2c::{self, NoSMBus};
 use kernel::hil::time::Alarm;
 
 // Setup static space for the objects.
 #[macro_export]
 macro_rules! sht3x_component_static {
-    ($A:ty, $I:ty $(,)?) => {{
+    ($A:ty, $I:ty, $SP:ty $(,)?) => {{
         let buffer = kernel::static_buf!([u8; 6]);
-        let i2c_device =
-            kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I>);
+        let i2c_device = kernel::static_buf!(
+            capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I, $SP>
+        );
         let sht3x_alarm = kernel::static_buf!(
             capsules_core::virtualizers::virtual_alarm::VirtualMuxAlarm<'static, $A>
         );
@@ -38,28 +40,41 @@ macro_rules! sht3x_component_static {
             capsules_extra::sht3x::SHT3x<
                 'static,
                 capsules_core::virtualizers::virtual_alarm::VirtualMuxAlarm<'static, $A>,
-                capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I>,
+                capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I, $SP>,
             >
         );
 
         (sht3x_alarm, i2c_device, sht3x, buffer)
     };};
+    ($A:ty, $I:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::sht3x_component_static!($A, $I, RoundRobinPolicy)
+    };};
 }
 
 pub type SHT3xComponentType<A, I> = capsules_extra::sht3x::SHT3x<'static, A, I>;
 
-pub struct SHT3xComponent<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> {
-    i2c_mux: &'static MuxI2C<'static, I>,
+pub struct SHT3xComponent<
+    A: 'static + Alarm<'static>,
+    I: 'static + i2c::I2CMaster<'static>,
+    SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+> {
+    i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SP>,
     i2c_address: u8,
     alarm_mux: &'static MuxAlarm<'static, A>,
 }
 
-impl<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> SHT3xComponent<A, I> {
+impl<
+        A: 'static + Alarm<'static>,
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > SHT3xComponent<A, I, SP>
+{
     pub fn new(
-        i2c_mux: &'static MuxI2C<'static, I>,
+        i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SP>,
         i2c_address: u8,
         alarm_mux: &'static MuxAlarm<'static, A>,
-    ) -> SHT3xComponent<A, I> {
+    ) -> SHT3xComponent<A, I, SP> {
         SHT3xComponent {
             i2c_mux,
             i2c_address,
@@ -68,18 +83,21 @@ impl<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> SHT3xCom
     }
 }
 
-impl<A: 'static + Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> Component
-    for SHT3xComponent<A, I>
+impl<
+        A: 'static + Alarm<'static>,
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > Component for SHT3xComponent<A, I, SP>
 {
     type StaticInput = (
         &'static mut MaybeUninit<VirtualMuxAlarm<'static, A>>,
-        &'static mut MaybeUninit<I2CDevice<'static, I>>,
+        &'static mut MaybeUninit<I2CDevice<'static, I, SP>>,
         &'static mut MaybeUninit<
-            SHT3x<'static, VirtualMuxAlarm<'static, A>, I2CDevice<'static, I>>,
+            SHT3x<'static, VirtualMuxAlarm<'static, A>, I2CDevice<'static, I, SP>>,
         >,
         &'static mut MaybeUninit<[u8; 6]>,
     );
-    type Output = &'static SHT3x<'static, VirtualMuxAlarm<'static, A>, I2CDevice<'static, I>>;
+    type Output = &'static SHT3x<'static, VirtualMuxAlarm<'static, A>, I2CDevice<'static, I, SP>>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let sht3x_i2c = static_buffer

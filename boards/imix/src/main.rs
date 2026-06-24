@@ -15,6 +15,7 @@ mod imix_components;
 
 use capsules_core::alarm::AlarmDriver;
 use capsules_core::console_ordered::ConsoleOrdered;
+use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
 use capsules_core::virtualizers::virtual_aes_ccm::MuxAES128CCM;
 use capsules_core::virtualizers::virtual_alarm::VirtualMuxAlarm;
 use capsules_core::virtualizers::virtual_i2c::MuxI2C;
@@ -118,8 +119,11 @@ type Rf233 = capsules_extra::rf233::RF233<
     'static,
     VirtualSpiMasterDevice<'static, sam4l::spi::SpiHw<'static>>,
 >;
-type Ieee802154MacDevice =
-    components::ieee802154::Ieee802154ComponentMacDeviceType<Rf233, sam4l::aes::Aes<'static>>;
+type Ieee802154MacDevice = components::ieee802154::Ieee802154ComponentMacDeviceType<
+    Rf233,
+    sam4l::aes::Aes<'static>,
+    RoundRobinPolicy,
+>;
 
 type SchedulerInUse = components::sched::round_robin::RoundRobinComponentType;
 

@@ -7,6 +7,7 @@
 #![no_std]
 #![no_main]
 
+use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
 use kernel::capabilities;
 use kernel::component::Component;
 use kernel::deferred_call::DeferredCallClient;
@@ -44,7 +45,8 @@ type ScreenAdapter = capsules_extra::screen::screen_adapters::ScreenARGB8888ToMo
     'static,
     qemu_rv32_virt_lib::ScreenHw,
 >;
-type ScreenSplitUser = components::screen::ScreenSplitUserComponentType<ScreenAdapter>;
+type ScreenSplitUser =
+    components::screen::ScreenSplitUserComponentType<ScreenAdapter, RoundRobinPolicy>;
 type ScreenOnLed = components::screen_on::ScreenOnLedComponentType<ScreenSplitUser, 4, 128, 64>;
 type ScreenOnLedSingle =
     capsules_extra::screen::screen_on_led::ScreenOnLedSingle<'static, ScreenOnLed>;

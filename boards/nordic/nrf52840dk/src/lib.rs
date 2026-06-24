@@ -72,7 +72,10 @@
 
 use core::ptr::addr_of;
 
-use capsules_core::virtualizers::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
+use capsules_core::virtualizers::{
+    selection_policy::RoundRobinPolicy,
+    virtual_alarm::{MuxAlarm, VirtualMuxAlarm},
+};
 use capsules_extra::net::ieee802154::MacAddress;
 use capsules_extra::net::ipv6::ip_utils::IPAddr;
 use kernel::component::Component;
@@ -190,11 +193,13 @@ type TemperatureDriver =
 type Ieee802154MacDevice = components::ieee802154::Ieee802154ComponentMacDeviceType<
     nrf52840::ieee802154_radio::Radio<'static>,
     nrf52840::aes::AesECB<'static>,
+    RoundRobinPolicy,
 >;
 /// Userspace 802.15.4 driver with in-kernel packet framing and MAC layer.
 pub type Ieee802154Driver = components::ieee802154::Ieee802154ComponentType<
     nrf52840::ieee802154_radio::Radio<'static>,
     nrf52840::aes::AesECB<'static>,
+    RoundRobinPolicy,
 >;
 
 // EUI64

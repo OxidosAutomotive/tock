@@ -18,7 +18,8 @@
 //! kernel::hil::sensors::TemperatureDriver::set_client(mlx90614, temp);
 //! ```
 
-use capsules_core::virtualizers::virtual_i2c::{MuxI2C, SMBusDevice};
+use capsules_core::virtualizers::selection_policy::{RoundRobinPolicy, SelectionPolicy};
+use capsules_core::virtualizers::virtual_i2c::{I2CDevice, MuxI2C, SMBusDevice};
 use capsules_extra::mlx90614::Mlx90614SMBus;
 use core::mem::MaybeUninit;
 use kernel::capabilities;
@@ -30,6 +31,7 @@ use kernel::hil::i2c::{self, NoSMBus};
 #[macro_export]
 macro_rules! mlx90614_component_static {
     () => {{
+        // Should generics be specified here?
         let i2c_device = kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::SMBusDevice);
         let buffer = kernel::static_buf!([u8; 14]);
         let mlx90614 = kernel::static_buf!(capsules_extra::mlx90614::Mlx90614SMBus<'static>);
@@ -41,18 +43,24 @@ macro_rules! mlx90614_component_static {
 pub struct Mlx90614SMBusComponent<
     I: 'static + i2c::I2CMaster<'static>,
     S: 'static + i2c::SMBusMaster<'static> = NoSMBus,
+    SPS: 'static + SelectionPolicy<&'static SMBusDevice<'static, I, S, SPS, SPI>> = RoundRobinPolicy,
+    SPI: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SPI, S, SPS>> = RoundRobinPolicy,
 > {
-    i2c_mux: &'static MuxI2C<'static, I, S>,
+    i2c_mux: &'static MuxI2C<'static, I, S, SPI, SPS>,
     i2c_address: u8,
     board_kernel: &'static kernel::Kernel,
     driver_num: usize,
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>, S: 'static + i2c::SMBusMaster<'static>>
-    Mlx90614SMBusComponent<I, S>
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        S: 'static + i2c::SMBusMaster<'static>,
+        SPS: 'static + SelectionPolicy<&'static SMBusDevice<'static, I, S, SPS, SPI>>,
+        SPI: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SPI, S, SPS>>,
+    > Mlx90614SMBusComponent<I, S, SPS, SPI>
 {
     pub fn new(
-        i2c: &'static MuxI2C<'static, I, S>,
+        i2c: &'static MuxI2C<'static, I, S, SPI, SPS>,
         i2c_address: u8,
         board_kernel: &'static kernel::Kernel,
         driver_num: usize,
@@ -66,15 +74,19 @@ impl<I: 'static + i2c::I2CMaster<'static>, S: 'static + i2c::SMBusMaster<'static
     }
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>, S: 'static + i2c::SMBusMaster<'static>> Component
-    for Mlx90614SMBusComponent<I, S>
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        S: 'static + i2c::SMBusMaster<'static>,
+        SPS: 'static + SelectionPolicy<&'static SMBusDevice<'static, I, S, SPS, SPI>>,
+        SPI: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SPI, S, SPS>>,
+    > Component for Mlx90614SMBusComponent<I, S, SPS, SPI>
 {
     type StaticInput = (
-        &'static mut MaybeUninit<SMBusDevice<'static, I, S>>,
+        &'static mut MaybeUninit<SMBusDevice<'static, I, S, SPS, SPI>>,
         &'static mut MaybeUninit<[u8; 14]>,
-        &'static mut MaybeUninit<Mlx90614SMBus<'static, SMBusDevice<'static, I, S>>>,
+        &'static mut MaybeUninit<Mlx90614SMBus<'static, SMBusDevice<'static, I, S, SPS, SPI>>>,
     );
-    type Output = &'static Mlx90614SMBus<'static, SMBusDevice<'static, I, S>>;
+    type Output = &'static Mlx90614SMBus<'static, SMBusDevice<'static, I, S, SPS, SPI>>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let mlx90614_smbus = static_buffer

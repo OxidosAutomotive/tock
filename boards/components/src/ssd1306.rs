@@ -15,6 +15,8 @@
 //!     .finalize(components::ssd1306_component_static!(nrf52840::i2c::TWI));
 //! ```
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
+use capsules_core::virtualizers::virtual_i2c::I2CDevice;
 use core::mem::MaybeUninit;
 use kernel::component::Component;
 use kernel::hil;
@@ -22,16 +24,20 @@ use kernel::hil;
 // Setup static space for the objects.
 #[macro_export]
 macro_rules! ssd1306_component_static {
-    ($I: ty $(,)?) => {{
+    ($I: ty, $SP:ty $(,)?) => {{
         let buffer = kernel::static_buf!([u8; capsules_extra::ssd1306::BUFFER_SIZE]);
         let ssd1306 = kernel::static_buf!(
             capsules_extra::ssd1306::Ssd1306<
                 'static,
-                capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I>,
+                capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I, $SP>,
             >
         );
 
         (buffer, ssd1306)
+    };};
+    ($I: ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::ssd1306_component_static!($I, RoundRobinPolicy)
     };};
 }
 
@@ -40,16 +46,23 @@ pub type Ssd1306ComponentType<I> = capsules_extra::ssd1306::Ssd1306<
     capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, I>,
 >;
 
-pub struct Ssd1306Component<I: hil::i2c::I2CMaster<'static> + 'static> {
-    i2c_device: &'static capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, I>,
+pub struct Ssd1306Component<
+    I: hil::i2c::I2CMaster<'static> + 'static,
+    SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+> {
+    i2c_device: &'static capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, I, SP>,
     use_charge_pump: bool,
 }
 
-impl<I: hil::i2c::I2CMaster<'static> + 'static> Ssd1306Component<I> {
+impl<
+        I: hil::i2c::I2CMaster<'static> + 'static,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > Ssd1306Component<I, SP>
+{
     pub fn new(
-        i2c_device: &'static capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, I>,
+        i2c_device: &'static capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, I, SP>,
         use_charge_pump: bool,
-    ) -> Ssd1306Component<I> {
+    ) -> Ssd1306Component<I, SP> {
         Ssd1306Component {
             i2c_device,
             use_charge_pump,
@@ -57,19 +70,23 @@ impl<I: hil::i2c::I2CMaster<'static> + 'static> Ssd1306Component<I> {
     }
 }
 
-impl<I: hil::i2c::I2CMaster<'static> + 'static> Component for Ssd1306Component<I> {
+impl<
+        I: hil::i2c::I2CMaster<'static> + 'static,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > Component for Ssd1306Component<I, SP>
+{
     type StaticInput = (
         &'static mut MaybeUninit<[u8; capsules_extra::ssd1306::BUFFER_SIZE]>,
         &'static mut MaybeUninit<
             capsules_extra::ssd1306::Ssd1306<
                 'static,
-                capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, I>,
+                capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, I, SP>,
             >,
         >,
     );
     type Output = &'static capsules_extra::ssd1306::Ssd1306<
         'static,
-        capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, I>,
+        capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, I, SP>,
     >;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {

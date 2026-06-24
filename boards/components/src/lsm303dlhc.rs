@@ -22,49 +22,61 @@
 //!    lsm303dlhc::Lsm303dlhcRange::Range4_7G,
 //! );
 //! ```
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_i2c::{I2CDevice, MuxI2C};
 use capsules_extra::lsm303dlhc::Lsm303dlhcI2C;
 use capsules_extra::lsm303xx;
 use core::mem::MaybeUninit;
 use kernel::component::Component;
-use kernel::hil::i2c;
+use kernel::hil::i2c::{self, NoSMBus};
 
 // Setup static space for the objects.
 #[macro_export]
 macro_rules! lsm303dlhc_component_static {
-    ($I:ty $(,)?) => {{
+    ($I:ty, $SP:ty $(,)?) => {{
         let buffer = kernel::static_buf!([u8; 8]);
         let accelerometer_i2c =
-            kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::I2CDevice<$I>);
+            kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::I2CDevice<$I, $SP>);
         let magnetometer_i2c =
-            kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::I2CDevice<$I>);
+            kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::I2CDevice<$I, $SP>);
         let lsm303dlhc = kernel::static_buf!(
             capsules_extra::lsm303dlhc::Lsm303dlhcI2C<
                 'static,
-                capsules_core::virtualizers::virtual_i2c::I2CDevice<$I>,
+                capsules_core::virtualizers::virtual_i2c::I2CDevice<$I, $SP>,
             >
         );
 
         (accelerometer_i2c, magnetometer_i2c, buffer, lsm303dlhc)
     };};
+    ($I:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::lsm303dlhc_component_static!($I, RoundRobinPolicy)
+    };};
 }
 
-pub struct Lsm303dlhcI2CComponent<I: 'static + i2c::I2CMaster<'static>> {
-    i2c_mux: &'static MuxI2C<'static, I>,
+pub struct Lsm303dlhcI2CComponent<
+    I: 'static + i2c::I2CMaster<'static>,
+    SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+> {
+    i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SP>,
     accelerometer_i2c_address: u8,
     magnetometer_i2c_address: u8,
     board_kernel: &'static kernel::Kernel,
     driver_num: usize,
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>> Lsm303dlhcI2CComponent<I> {
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > Lsm303dlhcI2CComponent<I, SP>
+{
     pub fn new(
-        i2c_mux: &'static MuxI2C<'static, I>,
+        i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SP>,
         accelerometer_i2c_address: Option<u8>,
         magnetometer_i2c_address: Option<u8>,
         board_kernel: &'static kernel::Kernel,
         driver_num: usize,
-    ) -> Lsm303dlhcI2CComponent<I> {
+    ) -> Lsm303dlhcI2CComponent<I, SP> {
         Lsm303dlhcI2CComponent {
             i2c_mux,
             accelerometer_i2c_address: accelerometer_i2c_address
@@ -77,14 +89,18 @@ impl<I: 'static + i2c::I2CMaster<'static>> Lsm303dlhcI2CComponent<I> {
     }
 }
 
-impl<I: 'static + i2c::I2CMaster<'static>> Component for Lsm303dlhcI2CComponent<I> {
+impl<
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > Component for Lsm303dlhcI2CComponent<I, SP>
+{
     type StaticInput = (
-        &'static mut MaybeUninit<I2CDevice<'static, I>>,
-        &'static mut MaybeUninit<I2CDevice<'static, I>>,
+        &'static mut MaybeUninit<I2CDevice<'static, I, SP>>,
+        &'static mut MaybeUninit<I2CDevice<'static, I, SP>>,
         &'static mut MaybeUninit<[u8; 8]>,
-        &'static mut MaybeUninit<Lsm303dlhcI2C<'static, I2CDevice<'static, I>>>,
+        &'static mut MaybeUninit<Lsm303dlhcI2C<'static, I2CDevice<'static, I, SP>>>,
     );
-    type Output = &'static Lsm303dlhcI2C<'static, I2CDevice<'static, I>>;
+    type Output = &'static Lsm303dlhcI2C<'static, I2CDevice<'static, I, SP>>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let grant_cap =

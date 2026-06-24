@@ -15,6 +15,7 @@
 //!             ));
 //! ```
 
+use capsules_core::virtualizers::selection_policy::SelectionPolicy;
 use capsules_core::virtualizers::virtual_alarm::MuxAlarm;
 use capsules_core::virtualizers::virtual_alarm::VirtualMuxAlarm;
 use capsules_core::virtualizers::virtual_i2c::{I2CDevice, MuxI2C};
@@ -22,22 +23,24 @@ use capsules_extra::dfrobot_rainfall_sensor::{DFRobotRainFall, BUFFER_SIZE};
 use core::mem::MaybeUninit;
 use kernel::component::Component;
 use kernel::hil::i2c;
+use kernel::hil::i2c::NoSMBus;
 use kernel::hil::time;
 use kernel::hil::time::Alarm;
 
 // Setup static space for the objects.
 #[macro_export]
 macro_rules! dfrobot_rainfall_sensor_component_static {
-    ($A:ty, $I:ty $(,)?) => {{
-        let i2c_device =
-            kernel::static_buf!(capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I>);
+    ($A:ty, $I:ty, $SP:ty $(,)?) => {{
+        let i2c_device = kernel::static_buf!(
+            capsules_core::virtualizers::virtual_i2c::I2CDevice<'static, $I, $SP>
+        );
         let i2c_buffer =
             kernel::static_buf!([u8; capsules_extra::dfrobot_rainfall_sensor::BUFFER_SIZE]);
         let dfrobot_rainfall_sensor = kernel::static_buf!(
             capsules_extra::dfrobot_rainfall_sensor::DFRobotRainFall<
                 'static,
                 VirtualMuxAlarm<'static, $A>,
-                capsules_core::virtualizers::virtual_i2c::I2CDevice<$I>,
+                capsules_core::virtualizers::virtual_i2c::I2CDevice<$I, $SP>,
             >
         );
         let alarm = kernel::static_buf!(
@@ -45,6 +48,10 @@ macro_rules! dfrobot_rainfall_sensor_component_static {
         );
 
         (i2c_device, i2c_buffer, dfrobot_rainfall_sensor, alarm)
+    };};
+    ($A:ty, $I:ty $(,)?) => {{
+        use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
+        $crate::dfrobot_rainfall_sensor_component_static!($A, $I, RoundRobinPolicy)
     };};
 }
 
@@ -54,17 +61,21 @@ pub type DFRobotRainFallSensorComponentType<A, I> =
 pub struct DFRobotRainFallSensorComponent<
     A: 'static + time::Alarm<'static>,
     I: 'static + i2c::I2CMaster<'static>,
+    SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
 > {
-    i2c_mux: &'static MuxI2C<'static, I>,
+    i2c_mux: &'static MuxI2C<'static, I, NoSMBus, SP>,
     i2c_address: u8,
     alarm_mux: &'static MuxAlarm<'static, A>,
 }
 
-impl<A: 'static + time::Alarm<'static>, I: 'static + i2c::I2CMaster<'static>>
-    DFRobotRainFallSensorComponent<A, I>
+impl<
+        A: 'static + time::Alarm<'static>,
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > DFRobotRainFallSensorComponent<A, I, SP>
 {
     pub fn new(
-        i2c: &'static MuxI2C<'static, I>,
+        i2c: &'static MuxI2C<'static, I, NoSMBus, SP>,
         i2c_address: u8,
         alarm_mux: &'static MuxAlarm<'static, A>,
     ) -> Self {
@@ -76,19 +87,22 @@ impl<A: 'static + time::Alarm<'static>, I: 'static + i2c::I2CMaster<'static>>
     }
 }
 
-impl<A: 'static + time::Alarm<'static>, I: 'static + i2c::I2CMaster<'static>> Component
-    for DFRobotRainFallSensorComponent<A, I>
+impl<
+        A: 'static + time::Alarm<'static>,
+        I: 'static + i2c::I2CMaster<'static>,
+        SP: 'static + SelectionPolicy<&'static I2CDevice<'static, I, SP>>,
+    > Component for DFRobotRainFallSensorComponent<A, I, SP>
 {
     type StaticInput = (
-        &'static mut MaybeUninit<I2CDevice<'static, I>>,
+        &'static mut MaybeUninit<I2CDevice<'static, I, SP>>,
         &'static mut MaybeUninit<[u8; BUFFER_SIZE]>,
         &'static mut MaybeUninit<
-            DFRobotRainFall<'static, VirtualMuxAlarm<'static, A>, I2CDevice<'static, I>>,
+            DFRobotRainFall<'static, VirtualMuxAlarm<'static, A>, I2CDevice<'static, I, SP>>,
         >,
         &'static mut MaybeUninit<VirtualMuxAlarm<'static, A>>,
     );
     type Output =
-        &'static DFRobotRainFall<'static, VirtualMuxAlarm<'static, A>, I2CDevice<'static, I>>;
+        &'static DFRobotRainFall<'static, VirtualMuxAlarm<'static, A>, I2CDevice<'static, I, SP>>;
 
     fn finalize(self, s: Self::StaticInput) -> Self::Output {
         let dfrobot_rainfall_sensor_i2c = s.0.write(I2CDevice::new(self.i2c_mux, self.i2c_address));

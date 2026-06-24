@@ -32,6 +32,7 @@
 //! lowpan_frag_test.start(); // If flashing the transmitting Imix
 //! ```
 
+use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
 use capsules_core::virtualizers::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use capsules_extra::ieee802154::device::{MacDevice, TxClient};
 use capsules_extra::net::ieee802154::MacAddress;
@@ -128,8 +129,11 @@ type Rf233 = capsules_extra::rf233::RF233<
         sam4l::spi::SpiHw<'static>,
     >,
 >;
-type Ieee802154MacDevice =
-    components::ieee802154::Ieee802154ComponentMacDeviceType<Rf233, sam4l::aes::Aes<'static>>;
+type Ieee802154MacDevice = components::ieee802154::Ieee802154ComponentMacDeviceType<
+    Rf233,
+    sam4l::aes::Aes<'static>,
+    RoundRobinPolicy,
+>;
 
 pub struct LowpanTest<'a, A: time::Alarm<'a>> {
     alarm: &'a A,

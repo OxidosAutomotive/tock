@@ -12,6 +12,7 @@
 
 use core::ptr::addr_of;
 
+use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
 use kernel::capabilities;
 use kernel::component::Component;
 use kernel::debug::PanicResources;
@@ -114,10 +115,12 @@ type ScreenDriver = components::screen::ScreenSharedComponentType<Screen>;
 type Ieee802154MacDevice = components::ieee802154::Ieee802154ComponentMacDeviceType<
     nrf52840::ieee802154_radio::Radio<'static>,
     nrf52840::aes::AesECB<'static>,
+    RoundRobinPolicy,
 >;
 type Ieee802154Driver = components::ieee802154::Ieee802154ComponentType<
     nrf52840::ieee802154_radio::Radio<'static>,
     nrf52840::aes::AesECB<'static>,
+    RoundRobinPolicy,
 >;
 type RngDriver = components::rng::RngComponentType<nrf52840::trng::Trng<'static>>;
 
