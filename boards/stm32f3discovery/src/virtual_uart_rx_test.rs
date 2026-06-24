@@ -52,9 +52,12 @@ use core::ptr::addr_of_mut;
 
 use capsules_core::test::virtual_uart::TestVirtualUartReceive;
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 use capsules_core::virtualizers::selection_policy::RoundRobinPolicy;
 >>>>>>> c709f59bd (allegedly, round robin is default option)
+=======
+>>>>>>> 3b3390d03 (revert some changes)
 use capsules_core::virtualizers::virtual_uart::{MuxUart, UartDevice};
 use kernel::debug;
 use kernel::hil::uart::Receive;
@@ -71,19 +74,27 @@ pub unsafe fn run_virtual_uart_receive(mux: &'static MuxUart<'static>) {
 unsafe fn static_init_test_receive_small(
     mux: &'static MuxUart<'static>,
 <<<<<<< HEAD
+<<<<<<< HEAD
 ) -> &'static TestVirtualUartReceive {
 =======
 ) -> &'static TestVirtualUartReceive<RoundRobinPolicy> {
 >>>>>>> c709f59bd (allegedly, round robin is default option)
+=======
+) -> &'static TestVirtualUartReceive {
+>>>>>>> 3b3390d03 (revert some changes)
     static mut SMALL: [u8; 3] = [0; 3];
     let device = static_init!(UartDevice<'static>, UartDevice::new(mux, true));
     device.setup();
     let test = static_init!(
 <<<<<<< HEAD
+<<<<<<< HEAD
         TestVirtualUartReceive,
 =======
         TestVirtualUartReceive<RoundRobinPolicy>,
 >>>>>>> c709f59bd (allegedly, round robin is default option)
+=======
+        TestVirtualUartReceive,
+>>>>>>> 3b3390d03 (revert some changes)
         TestVirtualUartReceive::new(device, &mut *addr_of_mut!(SMALL))
     );
     device.set_receive_client(test);
@@ -92,20 +103,12 @@ unsafe fn static_init_test_receive_small(
 
 unsafe fn static_init_test_receive_large(
     mux: &'static MuxUart<'static>,
-<<<<<<< HEAD
 ) -> &'static TestVirtualUartReceive {
-=======
-) -> &'static TestVirtualUartReceive<RoundRobinPolicy> {
->>>>>>> c709f59bd (allegedly, round robin is default option)
     static mut BUFFER: [u8; 7] = [0; 7];
     let device = static_init!(UartDevice<'static>, UartDevice::new(mux, true));
     device.setup();
     let test = static_init!(
-<<<<<<< HEAD
         TestVirtualUartReceive,
-=======
-        TestVirtualUartReceive<RoundRobinPolicy>,
->>>>>>> c709f59bd (allegedly, round robin is default option)
         TestVirtualUartReceive::new(device, &mut *addr_of_mut!(BUFFER))
     );
     device.set_receive_client(test);
