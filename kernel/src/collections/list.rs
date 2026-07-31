@@ -17,17 +17,12 @@ use core::cell::Cell;
 
 use crate::ErrorCode;
 
-/// Compare two possibly unsized references by data address only, ignoring
-/// pointer metadata such as a vtable pointer.
-fn same_node<T: ?Sized>(a: &T, b: &T) -> bool {
-    let a: *const T = a;
-    let b: *const T = b;
-
-    core::ptr::eq(a.cast::<()>(), b.cast::<()>())
-}
-
 /// Internal state of a node's list link.
-enum LinkState<'a, T: 'a + ?Sized> {
+#[derive(Clone, Copy)]
+enum LinkState<'a, T: 'a + ?Sized>
+where
+    T: Copy,
+{
     /// The node is not currently linked in any list.
     Unlinked,
 
@@ -36,14 +31,6 @@ enum LinkState<'a, T: 'a + ?Sized> {
 
     /// The node is linked and points to its successor.
     Next(&'a T),
-}
-
-impl<T: ?Sized> Copy for LinkState<'_, T> {}
-
-impl<T: ?Sized> Clone for LinkState<'_, T> {
-    fn clone(&self) -> Self {
-        *self
-    }
 }
 
 /// Link embedded in every node stored in a [`List`].
@@ -92,7 +79,7 @@ pub struct ListIterator<'a, T: 'a + ?Sized + ListNode<'a, T>> {
 impl<'a, T: ?Sized + ListNode<'a, T>> Iterator for ListIterator<'a, T> {
     type Item = &'a T;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<&'a T> {
         match self.cur {
             Some(node) => {
                 self.cur = match node.next().0.get() {
@@ -133,7 +120,7 @@ impl<'a, T: ?Sized + ListNode<'a, T>> List<'a, T> {
 
         // SAFETY: The check above established that `node` is unlinked.
         unsafe {
-            self.push_head(node);
+            self.push_head_unchecked(node);
         }
 
         Ok(())
@@ -147,13 +134,12 @@ impl<'a, T: ?Sized + ListNode<'a, T>> List<'a, T> {
     ///
     /// # Safety
     ///
-    /// The caller must ensure that `node` is not currently linked in this
-    /// list or any other list.
+    /// The caller must ensure that `node` is not currently linked in a list
     ///
     /// Inserting an already-linked node can corrupt list structure, create a
     /// cycle, or cause nodes to become unreachable through their original
     /// list.
-    pub unsafe fn push_head(&self, node: &'a T) {
+    pub unsafe fn push_head_unchecked(&self, node: &'a T) {
         node.next().0.set(match self.head.get() {
             Some(head) => LinkState::Next(head),
             None => LinkState::Tail,
@@ -174,7 +160,7 @@ impl<'a, T: ?Sized + ListNode<'a, T>> List<'a, T> {
 
         // SAFETY: The check above established that `node` is unlinked.
         unsafe {
-            self.push_tail(node);
+            self.push_tail_unchecked(node);
         }
 
         Ok(())
@@ -188,13 +174,12 @@ impl<'a, T: ?Sized + ListNode<'a, T>> List<'a, T> {
     ///
     /// # Safety
     ///
-    /// The caller must ensure that `node` is not currently linked in this
-    /// list or any other list.
+    /// The caller must ensure that `node` is not currently linked in a list
     ///
     /// Inserting an already-linked node can corrupt list structure, create a
     /// cycle, or cause nodes to become unreachable through their original
     /// list.
-    pub unsafe fn push_tail(&self, node: &'a T) {
+    pub unsafe fn push_tail_unchecked(&self, node: &'a T) {
         // The inserted node becomes the new tail.
         node.next().0.set(LinkState::Tail);
 
@@ -233,6 +218,9 @@ impl<'a, T: ?Sized + ListNode<'a, T>> List<'a, T> {
     /// Unlinks `node` if it is a member of this list.
     ///
     /// Returns `true` if the node was found and removed.
+    /// Unlinks `node` if it is a member of this list.
+    ///
+    /// Returns `true` if the node was found and removed.
     pub fn remove(&self, node: &'a T) -> bool {
         // This only rejects a node that is definitely unlinked. A linked node
         // might belong to another list, so membership must still be verified
@@ -246,7 +234,7 @@ impl<'a, T: ?Sized + ListNode<'a, T>> List<'a, T> {
             None => return false,
         };
 
-        if same_node(head, node) {
+        if core::ptr::addr_eq(head, node) {
             self.pop_head();
             return true;
         }
@@ -254,7 +242,7 @@ impl<'a, T: ?Sized + ListNode<'a, T>> List<'a, T> {
         let mut previous = head;
 
         while let LinkState::Next(current) = previous.next().0.get() {
-            if same_node(current, node) {
+            if core::ptr::addr_eq(current, node) {
                 match current.next().0.get() {
                     LinkState::Next(next) => {
                         // Remove a middle node by linking its predecessor
@@ -284,7 +272,6 @@ impl<'a, T: ?Sized + ListNode<'a, T>> List<'a, T> {
 
         false
     }
-
     /// Returns an iterator from the head to the tail.
     pub fn iter(&self) -> ListIterator<'a, T> {
         ListIterator {
