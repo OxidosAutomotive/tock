@@ -9,14 +9,13 @@
 use components::hmac_component_static;
 use kernel::capabilities::{self, MemoryAllocationCapability};
 use kernel::component::Component;
-use kernel::debug;
 use kernel::debug::PanicResources;
 use kernel::hil::gpio::{Configure, Output};
 use kernel::hil::symmetric_encryption::AES256;
 use kernel::platform::chip::Chip;
 use kernel::platform::{KernelResources, SyscallDriverLookup};
 use kernel::utilities::single_thread_value::SingleThreadValue;
-use kernel::{create_capability, static_init};
+use kernel::{create_capability, debug, static_init};
 
 use stm32u545::gpio::PinId;
 
@@ -272,6 +271,11 @@ unsafe fn start() -> (
         <ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider,
     >();
 
+    let _ = PANIC_RESOURCES
+        .bind_to_thread::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(
+            PanicResources::new(),
+        );
+
     // Create individual drivers
     let exti = static_init!(
         stm32u545::exti::Exti<'static>,
@@ -325,7 +329,6 @@ unsafe fn start() -> (
     PANIC_RESOURCES.get().map(|resources| {
         resources.processes.put(processes.as_slice());
     });
-
     let board_kernel = static_init!(kernel::Kernel, kernel::Kernel::new(processes.as_slice()));
 
     let uart_mux = components::console::UartMuxComponent::new(&periphs.usart1, 115200)
@@ -355,10 +358,11 @@ unsafe fn start() -> (
     )
     .finalize(components::debug_writer_component_static!());
 
-    let _ = PANIC_RESOURCES
-        .bind_to_thread::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(
-            PanicResources::new(),
-        );
+    let process_printer = components::process_printer::ProcessPrinterTextComponent::new()
+        .finalize(components::process_printer_text_component_static!());
+    PANIC_RESOURCES.get().map(|resources| {
+        resources.printer.put(process_printer);
+    });
 
     kernel::create_typed_capability!(process_console_cap, ProcessConsoleCap:
         kernel::capabilities::ProcessManagementCapability,
@@ -374,13 +378,6 @@ unsafe fn start() -> (
         stm32u545::aes::ecb::Aes<'static, AES256>,
         AES256
     ));
-
-    let process_printer = components::process_printer::ProcessPrinterTextComponent::new()
-        .finalize(components::process_printer_text_component_static!());
-
-    PANIC_RESOURCES.get().map(|resources| {
-        resources.printer.put(process_printer);
-    });
 
     let process_console = components::process_console::ProcessConsoleComponent::new(
         board_kernel,
@@ -526,17 +523,15 @@ unsafe fn start() -> (
             11 => periphs.gpio_a.pin(PinId::Pin07), // D11
             // 12 => D12/PA6 is used by the PWM capsule
             // 13 => D13/PA5 is used by the LD2 LED capsule
-            // Pins 14 and 15 are used by I2C
-            // 14 => periphs.gpio_b.pin(PinId::Pin07), // D14
-            // 15 => periphs.gpio_b.pin(PinId::Pin06), // D15
+            // D14-D15 require GPIOB
 
-            // Analog pins are used by ADC
-            // 16 => periphs.gpio_a.pin(PinId::Pin00), // A0
-            // 17 => periphs.gpio_a.pin(PinId::Pin01), // A1
-            // 18 => periphs.gpio_a.pin(PinId::Pin04), // A2
-            // 19 => periphs.gpio_b.pin(PinId::Pin00), // A3
-            // 20 => periphs.gpio_c.pin(PinId::Pin01), // A4
-            // 21 => periphs.gpio_c.pin(PinId::Pin00), // A5
+            // Analog pins exposed as GPIO
+            16 => periphs.gpio_a.pin(PinId::Pin00), // A0
+            17 => periphs.gpio_a.pin(PinId::Pin01), // A1
+            18 => periphs.gpio_a.pin(PinId::Pin04), // A2
+            // 19 => A3 requires GPIOB
+            20 => periphs.gpio_c.pin(PinId::Pin01), // A4
+            21 => periphs.gpio_c.pin(PinId::Pin00), // A5
 
             // ST Morpho-only GPIO pins (no D/A aliases)
             22 => periphs.gpio_c.pin(PinId::Pin10), // CN7 pin 1
@@ -641,7 +636,7 @@ unsafe fn start() -> (
         chip,
         app_flash,
         app_memory,
-        &capsules_system::process_policies::PanicFaultPolicy {},
+        &capsules_system::process_policies::RestartWithDebugFaultPolicy {},
         &create_capability!(capabilities::ProcessManagementCapability),
     );
 

@@ -234,8 +234,11 @@ impl<'a> Usart<'a> {
     }
 
     // Adapted from embassy-rs/embassy/embassy-stm32/src/uart/mod.rs
+    //
+    // Takes the registers rather than `&self` so that the panic writer, which
+    // has no access to the driver instance, can reuse this calculation.
     fn find_and_set_baudrate(
-        &self,
+        registers: &UsartRegisters,
         baudrate: u32,
         kernel_clock: Hertz,
     ) -> Result<(), BaudrateError> {
@@ -266,11 +269,11 @@ impl<'a> Usart<'a> {
                 if brr * 2 >= brr_min {
                     over8 = true;
 
-                    self.registers
+                    registers
                         .brr
                         .write(BRR::BRR.val(((brr << 1) & !0xF) | (brr & 0x07)));
 
-                    self.registers.presc.write(presc_fields_value);
+                    registers.presc.write(presc_fields_value);
 
                     found_brr = true;
                     break;
@@ -280,20 +283,63 @@ impl<'a> Usart<'a> {
             }
 
             if brr < brr_max {
-                self.registers.brr.write(BRR::BRR.val(brr));
-                self.registers.presc.write(presc_fields_value);
+                registers.brr.write(BRR::BRR.val(brr));
+                registers.presc.write(presc_fields_value);
                 found_brr = true;
                 break;
             }
         }
 
-        self.registers.cr1.modify(CR1::OVER8.val(over8 as u32));
+        registers.cr1.modify(CR1::OVER8.val(over8 as u32));
 
         if found_brr {
             Ok(())
         } else {
             Err(BaudrateError::TooLow)
         }
+    }
+
+    /// Bring the USART up for the given parameters and kernel clock frequency.
+    ///
+    /// Shared by the [`uart::Configure`] implementation and by the panic
+    /// writer, so that the panic path derives its baud rate divisor from the
+    /// same clock the board configured the peripheral with, rather than
+    /// assuming one.
+    ///
+    /// Only the baud rate from `params` is honored; the remaining parameters
+    /// are fixed at the reset configuration of 8 data bits, no parity and one
+    /// stop bit.
+    fn configure_registers(
+        registers: &UsartRegisters,
+        params: uart::Parameters,
+        kernel_clock: Hertz,
+    ) -> Result<(), kernel::ErrorCode> {
+        // The baud rate registers can only be written while the USART is
+        // disabled.
+        registers.cr1.modify(CR1::UE::CLEAR);
+
+        // Set the baud rate
+        if Self::find_and_set_baudrate(registers, params.baud_rate, kernel_clock).is_err() {
+            return Err(kernel::ErrorCode::INVAL);
+        }
+
+        registers.icr.write(
+            ICR::TCCF::SET + ICR::ORECF::SET + ICR::NECF::SET + ICR::FECF::SET + ICR::PECF::SET,
+        );
+
+        // Enable transmitter, receiver, and USART. This must preserve the
+        // `OVER8` bit, which `find_and_set_baudrate` selected as part of the
+        // baud rate divisor.
+        registers.cr1.modify(
+            CR1::TE::SET
+                + CR1::RE::SET
+                + CR1::UE::SET
+                + CR1::TXEIE::CLEAR
+                + CR1::TCIE::CLEAR
+                + CR1::RXNEIE::CLEAR,
+        );
+
+        Ok(())
     }
 
     /// Associates a DMA controller and channels with the USART driver.
@@ -529,25 +575,7 @@ impl uart::Configure for Usart<'_> {
             return Err(kernel::ErrorCode::FAIL);
         };
 
-        let regs = &*self.registers;
-        regs.cr1.modify(CR1::UE::CLEAR);
-
-        // Set the baud rate
-        if self
-            .find_and_set_baudrate(params.baud_rate, clock_frequency)
-            .is_err()
-        {
-            return Err(kernel::ErrorCode::INVAL);
-        }
-
-        regs.icr.write(
-            ICR::TCCF::SET + ICR::ORECF::SET + ICR::NECF::SET + ICR::FECF::SET + ICR::PECF::SET,
-        );
-
-        // Enable transmitter, receiver, and USART
-        regs.cr1.write(CR1::TE::SET + CR1::RE::SET + CR1::UE::SET);
-
-        Ok(())
+        Self::configure_registers(&self.registers, params, clock_frequency)
     }
 }
 
@@ -636,26 +664,39 @@ impl core::fmt::Write for UsartPanicWriter {
     }
 }
 
+/// Configuration for the synchronous USART panic writer.
+///
+/// This captures everything needed to setup the USART for panic display, even
+/// if the normal kernel had initialized it differently.
 pub struct UsartPanicWriterConfig {
-    pub base: StaticRef<UsartRegisters>,
+    pub registers: StaticRef<UsartRegisters>,
+    /// The frequency of the kernel clock feeding this USART
+    ///
+    /// The baud rate divisor is computed from this, so it cannot be assumed:
+    /// boards are free to configure the clock tree however they like.
+    pub clock: Hertz,
+    pub params: uart::Parameters,
 }
 
 impl PanicWriter for Usart<'_> {
     type Config = UsartPanicWriterConfig;
+
     fn create_panic_writer(
         config: Self::Config,
         _panic: &core::panic::PanicInfo,
     ) -> impl IoWrite + core::fmt::Write {
-        let writer = UsartPanicWriter {
-            registers: config.base,
-        };
+        let registers = config.registers;
 
-        let regs = &*writer.registers;
-        regs.cr1.modify(CR1::UE::CLEAR);
-        // Baud Rate
-        regs.brr.write(BRR::BRR.val(35));
-        regs.cr1.write(CR1::TE::SET + CR1::RE::SET + CR1::UE::SET);
+        // A transfer may have been in flight when the panic occurred. Stop the
+        // peripheral from issuing further DMA requests, so that the bytes this
+        // writer polls out are not interleaved with DMA-driven ones.
+        registers.cr3.modify(CR3::DMAT::CLEAR + CR3::DMAR::CLEAR);
 
-        writer
+        // Configure the USART correctly for panics. Unlike other chips, this
+        // does not go through `uart::Configure` on a fresh `Usart`, because
+        // constructing one would claim another deferred call slot.
+        let _ = Self::configure_registers(&registers, config.params, config.clock);
+
+        UsartPanicWriter { registers }
     }
 }

@@ -23,6 +23,7 @@ use crate::{
     rcc::{
         self,
         config::{ClockMuxConfig, RccConfig},
+        hertz::Hertz,
         values::{
             AHBPrescaler, APBPrescaler, Adcdacsel, I2csel, MsiRange, Rtcsel, Spi1sel, Sysclk,
             Usart1sel,
@@ -93,6 +94,15 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
             }),
         }
     }
+
+    /// Frequency of PCLK2, which is the kernel clock of USART1 and SPI1
+    ///
+    /// This is derived from the `RccConfig` hardcoded in [`Self::init`]: SYSCLK is the 16MHz HSI oscillator, and neither the AHB nor the APB2 prescaler divides it
+    ///
+    /// Drivers normally receive this frequency at runtime through `set_clock`, so this constant is only needed where that is not possible, i.e. by boards setting up a panic writer for one of these peripherals
+    ///
+    /// It must be kept in sync with the `RccConfig` in [`Self::init`]
+    pub const PCLK2_FREQUENCY: Hertz = Hertz::mhz(16);
 
     /// Since the `RccConfig` struct passed to `Rcc::init` is hardcoded here (as opposed to being passed in from outside), it's reasonable to assume that its fields are set correctly
     ///
