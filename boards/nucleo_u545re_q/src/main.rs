@@ -311,10 +311,10 @@ unsafe fn start() -> (
 
     // Initialize wiring (DMA, clocks)
     // This can only fail if the `RccConfig` inside is intentionally modified to be incorrect (as explained in the function's doc comment)
-    let (clocks, _) = periphs.init();
+    let clocks = periphs.init();
 
     // Hand the kernel clock of `PANIC_USART` to the panic handler, which needs it to derive the same baud rate divisor as the driver
-    if let Some(clock) = clocks.usart1 {
+    if let Some(clock) = clocks.ok().and_then(|clocks| clocks.usart1) {
         let _ = PANIC_USART_CLOCK
             .bind_to_thread::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(clock);
     }

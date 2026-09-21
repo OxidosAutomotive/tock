@@ -217,6 +217,12 @@ impl<'a> Usart<'a> {
         self.clock.set(clock);
     }
 
+    /// The smallest baud rate divisor the hardware accepts, per RM0456 § 62.5.4
+    ///
+    /// `BRR` resets to zero, so a value of at least this means that a baud rate
+    /// was set at some point.
+    const MIN_BRR: u32 = 0x10;
+
     // Adapted from embassy-rs/embassy/embassy-stm32/src/uart/mod.rs
     fn calculate_brr(baud: u32, pclk: u32, presc: u32, mul: u32) -> u32 {
         // The calculation to be done to get the BRR is `mul * pclk / presc / baud`
@@ -257,7 +263,7 @@ impl<'a> Usart<'a> {
             (256, PRESC::PRESCALER::DIV256),
         ];
 
-        let (mul, brr_min, brr_max) = (1, 0x10, 0x1_0000);
+        let (mul, brr_min, brr_max) = (1, Self::MIN_BRR, 0x1_0000);
 
         let mut found_brr = false;
         let mut over8 = false;
@@ -643,10 +649,17 @@ impl<'a> uart::Receive<'a> for Usart<'a> {
 
 struct UsartPanicWriter {
     registers: StaticRef<UsartRegisters>,
+    /// Whether the USART is in a state where polling its status flags makes
+    /// progress. A writer which is not is a sink, as it cannot output anything.
+    transmits: bool,
 }
 
 impl IoWrite for UsartPanicWriter {
     fn write(&mut self, buf: &[u8]) -> usize {
+        if !self.transmits {
+            return 0;
+        }
+
         for &byte in buf {
             let regs = &*self.registers;
             while !regs.isr.is_set(ISR::TXE) {}
@@ -677,8 +690,9 @@ pub struct UsartPanicWriterConfig {
     /// boards are free to configure the clock tree however they like.
     ///
     /// `None` means the clock tree was not configured yet, in which case the
-    /// baud rate is left alone, since there is no frequency to derive it from.
-    /// The USART is then not operational, and writing to it will hang.
+    /// baud rate cannot be derived, and whichever one the kernel had set is
+    /// kept. If it had not set one either, the panic writer discards its output
+    /// instead of polling a USART which will never transmit.
     pub clock: Option<Hertz>,
     pub params: uart::Parameters,
 }
@@ -697,13 +711,40 @@ impl PanicWriter for Usart<'_> {
         // writer polls out are not interleaved with DMA-driven ones.
         registers.cr3.modify(CR3::DMAT::CLEAR + CR3::DMAR::CLEAR);
 
-        // Configure the USART correctly for panics. Unlike other chips, this
-        // does not go through `uart::Configure` on a fresh `Usart`, because
-        // constructing one would claim another deferred call slot.
-        if let Some(clock) = config.clock {
-            let _ = Self::configure_registers(&registers, config.params, clock);
+        match config.clock {
+            // Configure the USART correctly for panics. Unlike other chips, this
+            // does not go through `uart::Configure` on a fresh `Usart`, because
+            // constructing one would claim another deferred call slot.
+            Some(clock) => {
+                let _ = Self::configure_registers(&registers, config.params, clock);
+            }
+            // Without the kernel clock frequency, no divisor can be computed. If
+            // one was set before the panic it is still in `BRR`, so keep it and
+            // only make sure the transmitter is on, rather than give up on
+            // output. The `params` baud rate is not honored in this case.
+            None => {
+                if registers.brr.read(BRR::BRR) >= Self::MIN_BRR {
+                    registers.cr1.modify(
+                        CR1::TE::SET
+                            + CR1::UE::SET
+                            + CR1::TXEIE::CLEAR
+                            + CR1::TCIE::CLEAR
+                            + CR1::RXNEIE::CLEAR,
+                    );
+                }
+            }
         }
 
-        UsartPanicWriter { registers }
+        // Polling the status flags of a USART which cannot transmit would spin
+        // forever, taking the rest of the panic handler with it. That is the
+        // case if no valid divisor ever reached the peripheral, or if it is not
+        // even clocked, in which case its registers read as zero.
+        let transmits =
+            registers.brr.read(BRR::BRR) >= Self::MIN_BRR && registers.cr1.is_set(CR1::UE);
+
+        UsartPanicWriter {
+            registers,
+            transmits,
+        }
     }
 }

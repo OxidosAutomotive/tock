@@ -104,8 +104,8 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
     /// - the rest of the chip will still be initialized
     /// - this function will return `Err(kernel::ErrorCode::INVAL)`; the board level can choose what to do in case this happens
     ///
-    /// The effective frequencies which the RCC derived from that `RccConfig` are returned alongside, since the board may need them for peripherals it drives outside of the HILs, e.g. to set up a panic writer. They are returned even in the error case, as the invalid ones are exactly those reported as `None`
-    pub fn init(&'static self) -> (rcc::Clocks, Result<(), kernel::ErrorCode>) {
+    /// On success, the effective frequencies which the RCC derived from that `RccConfig` are returned, since the board may need them for peripherals it drives outside of the HILs, e.g. to set up a panic writer
+    pub fn init(&'static self) -> Result<rcc::Clocks, kernel::ErrorCode> {
         // Enable clock routing to all used peripherals
         self.rcc.enable_tim2();
         self.rcc.enable_tim3();
@@ -253,9 +253,9 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
 
         // Return an error if at least one of the peripheral clocks was invalid (as explained in the function's doc comment)
         if clocks_ok {
-            (clocks, Ok(()))
+            Ok(clocks)
         } else {
-            (clocks, Err(kernel::ErrorCode::INVAL))
+            Err(kernel::ErrorCode::INVAL)
         }
     }
 }
