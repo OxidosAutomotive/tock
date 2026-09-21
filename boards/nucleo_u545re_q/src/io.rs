@@ -7,7 +7,6 @@ use core::panic::PanicInfo;
 
 use kernel::debug;
 use kernel::hil::uart;
-use stm32u545::chip::Stm32u5xxDefaultPeripherals;
 use stm32u545::usart::{USART1_BASE, Usart, UsartPanicWriterConfig};
 
 /// Panic handler.
@@ -16,7 +15,7 @@ pub unsafe fn panic_fmt(info: &PanicInfo) -> ! {
     debug::panic_print::<Usart, crate::ChipHw, crate::ProcessPrinterInUse>(
         UsartPanicWriterConfig {
             registers: USART1_BASE,
-            clock: Stm32u5xxDefaultPeripherals::PCLK2_FREQUENCY,
+            clock: crate::USART1_CLOCK.get().copied(),
             params: uart::Parameters {
                 baud_rate: 115200,
                 stop_bits: uart::StopBits::One,

@@ -23,7 +23,6 @@ use crate::{
     rcc::{
         self,
         config::{ClockMuxConfig, RccConfig},
-        hertz::Hertz,
         values::{
             AHBPrescaler, APBPrescaler, Adcdacsel, I2csel, MsiRange, Rtcsel, Spi1sel, Sysclk,
             Usart1sel,
@@ -95,15 +94,6 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
         }
     }
 
-    /// Frequency of PCLK2, which is the kernel clock of USART1 and SPI1
-    ///
-    /// This is derived from the `RccConfig` hardcoded in [`Self::init`]: SYSCLK is the 16MHz HSI oscillator, and neither the AHB nor the APB2 prescaler divides it
-    ///
-    /// Drivers normally receive this frequency at runtime through `set_clock`, so this constant is only needed where that is not possible, i.e. by boards setting up a panic writer for one of these peripherals
-    ///
-    /// It must be kept in sync with the `RccConfig` in [`Self::init`]
-    pub const PCLK2_FREQUENCY: Hertz = Hertz::mhz(16);
-
     /// Since the `RccConfig` struct passed to `Rcc::init` is hardcoded here (as opposed to being passed in from outside), it's reasonable to assume that its fields are set correctly
     ///
     /// If, however, it is modified to be invalid (e.g. selecting a clock source in `RccConfig::mux` that isn't enabled), some peripheral clocks in the `Clocks` struct returned by `Rcc::init` may be `None`
@@ -113,7 +103,9 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
     ///     - some of their functions will fail, which is usually indicated by `Err(kernel::ErrorCode::FAIL)` where the HIL allows it
     /// - the rest of the chip will still be initialized
     /// - this function will return `Err(kernel::ErrorCode::INVAL)`; the board level can choose what to do in case this happens
-    pub fn init(&'static self) -> Result<(), kernel::ErrorCode> {
+    ///
+    /// The effective frequencies which the RCC derived from that `RccConfig` are returned alongside, since the board may need them for peripherals it drives outside of the HILs, e.g. to set up a panic writer. They are returned even in the error case, as the invalid ones are exactly those reported as `None`
+    pub fn init(&'static self) -> (rcc::Clocks, Result<(), kernel::ErrorCode>) {
         // Enable clock routing to all used peripherals
         self.rcc.enable_tim2();
         self.rcc.enable_tim3();
@@ -261,9 +253,9 @@ impl<'a> Stm32u5xxDefaultPeripherals<'a> {
 
         // Return an error if at least one of the peripheral clocks was invalid (as explained in the function's doc comment)
         if clocks_ok {
-            Ok(())
+            (clocks, Ok(()))
         } else {
-            Err(kernel::ErrorCode::INVAL)
+            (clocks, Err(kernel::ErrorCode::INVAL))
         }
     }
 }

@@ -670,11 +670,16 @@ impl core::fmt::Write for UsartPanicWriter {
 /// if the normal kernel had initialized it differently.
 pub struct UsartPanicWriterConfig {
     pub registers: StaticRef<UsartRegisters>,
-    /// The frequency of the kernel clock feeding this USART
+    /// The frequency of the kernel clock feeding this USART, if the board knows
+    /// it
     ///
     /// The baud rate divisor is computed from this, so it cannot be assumed:
     /// boards are free to configure the clock tree however they like.
-    pub clock: Hertz,
+    ///
+    /// `None` means the clock tree was not configured yet, in which case the
+    /// baud rate is left alone, since there is no frequency to derive it from.
+    /// The USART is then not operational, and writing to it will hang.
+    pub clock: Option<Hertz>,
     pub params: uart::Parameters,
 }
 
@@ -695,7 +700,9 @@ impl PanicWriter for Usart<'_> {
         // Configure the USART correctly for panics. Unlike other chips, this
         // does not go through `uart::Configure` on a fresh `Usart`, because
         // constructing one would claim another deferred call slot.
-        let _ = Self::configure_registers(&registers, config.params, config.clock);
+        if let Some(clock) = config.clock {
+            let _ = Self::configure_registers(&registers, config.params, clock);
+        }
 
         UsartPanicWriter { registers }
     }
