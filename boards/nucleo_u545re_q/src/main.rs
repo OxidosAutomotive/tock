@@ -360,6 +360,11 @@ unsafe fn start() -> (
     )
     .finalize(components::debug_writer_component_static!());
 
+    let _ = PANIC_RESOURCES
+        .bind_to_thread::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(
+            PanicResources::new(),
+        );
+
     kernel::create_typed_capability!(process_console_cap, ProcessConsoleCap:
         kernel::capabilities::ProcessManagementCapability,
         kernel::capabilities::ProcessStartCapability
