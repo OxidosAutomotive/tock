@@ -223,6 +223,13 @@ impl<'a> Usart<'a> {
     /// was set at some point.
     const MIN_BRR: u32 = 0x10;
 
+    /// The kernel clock frequency the panic writer assumes when it has to set
+    /// a baud rate itself
+    ///
+    /// This is PCLK2, which `Stm32u5xxDefaultPeripherals::init()` runs from the
+    /// 16 MHz HSI.
+    const PANIC_DEFAULT_CLOCK: Hertz = Hertz::mhz(16);
+
     // Adapted from embassy-rs/embassy/embassy-stm32/src/uart/mod.rs
     fn calculate_brr(baud: u32, pclk: u32, presc: u32, mul: u32) -> u32 {
         // The calculation to be done to get the BRR is `mul * pclk / presc / baud`
@@ -683,12 +690,6 @@ impl core::fmt::Write for UsartPanicWriter {
 /// if the normal kernel had initialized it differently.
 pub struct UsartPanicWriterConfig {
     pub registers: StaticRef<UsartRegisters>,
-    /// The frequency of the kernel clock feeding this USART
-    ///
-    /// Only used when the kernel did not set a baud rate before the panic, to
-    /// compute the divisor for `params`. It cannot be assumed by the chip, as
-    /// boards are free to configure the clock tree however they like.
-    pub clock: Hertz,
     /// The parameters to fall back to when the kernel did not set a baud rate
     ///
     /// A USART which the kernel already configured is used as is, so that the
@@ -722,11 +723,11 @@ impl PanicWriter for Usart<'_> {
                     + CR1::RXNEIE::CLEAR,
             );
         } else {
-            // No baud rate was set yet, so configure the USART from the
-            // defaults the board provided. Unlike other chips, this does not go
-            // through `uart::Configure` on a fresh `Usart`, because
+            // No baud rate was set yet, so configure the USART from `params`
+            // and the default kernel clock. Unlike other chips, this does not
+            // go through `uart::Configure` on a fresh `Usart`, because
             // constructing one would claim another deferred call slot.
-            let _ = Self::configure_registers(&registers, config.params, config.clock);
+            let _ = Self::configure_registers(&registers, config.params, Self::PANIC_DEFAULT_CLOCK);
         }
 
         // Polling the status flags of a USART which cannot transmit would spin

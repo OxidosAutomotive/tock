@@ -15,11 +15,6 @@ pub unsafe fn panic_fmt(info: &PanicInfo) -> ! {
     debug::panic_print::<Usart, crate::ChipHw, crate::ProcessPrinterInUse>(
         UsartPanicWriterConfig {
             registers: crate::PANIC_USART,
-            // Used only if the console did not configure the USART yet
-            clock: crate::PANIC_USART_CLOCK
-                .get()
-                .copied()
-                .unwrap_or(crate::PANIC_USART_DEFAULT_CLOCK),
             params: uart::Parameters {
                 baud_rate: 115200,
                 stop_bits: uart::StopBits::One,
