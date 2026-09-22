@@ -315,9 +315,8 @@ impl<'a> Usart<'a> {
     /// Bring the USART up for the given parameters and kernel clock frequency.
     ///
     /// Shared by the [`uart::Configure`] implementation and by the panic
-    /// writer, so that the panic path derives its baud rate divisor from the
-    /// same clock the board configured the peripheral with, rather than
-    /// assuming one.
+    /// writer, which uses it when the kernel did not configure the USART
+    /// before the panic.
     ///
     /// Only the baud rate from `params` is honored; the remaining parameters
     /// are fixed at the reset configuration of 8 data bits, no parity and one
@@ -686,8 +685,8 @@ impl core::fmt::Write for UsartPanicWriter {
 
 /// Configuration for the synchronous USART panic writer.
 ///
-/// This captures everything needed to setup the USART for panic display, even
-/// if the normal kernel had initialized it differently.
+/// A USART which the kernel already configured is used as is. Otherwise, this
+/// captures everything needed to set it up for panic display.
 pub struct UsartPanicWriterConfig {
     pub registers: StaticRef<UsartRegisters>,
     /// The parameters to fall back to when the kernel did not set a baud rate
