@@ -49,10 +49,15 @@ const PANIC_USART: StaticRef<UsartRegisters> = USART1_BASE;
 /// The kernel clock frequency of [`PANIC_USART`], as configured by the RCC in
 /// `Stm32u5xxDefaultPeripherals::init()`.
 ///
-/// The panic writer computes its baud rate divisor from this, so it cannot
-/// assume a frequency. Being unbound means that the clock tree is not
-/// configured yet, i.e. that `init()` did not run (or failed) before the panic.
+/// The panic writer only needs this if the console did not configure
+/// [`PANIC_USART`] before the panic, to derive a baud rate divisor itself.
+/// Being unbound means that `init()` did not run (or failed) before the panic,
+/// in which case [`PANIC_USART_DEFAULT_CLOCK`] is used instead.
 static PANIC_USART_CLOCK: SingleThreadValue<Hertz> = SingleThreadValue::new();
+
+/// The default kernel clock frequency of [`PANIC_USART`] on this board: PCLK2,
+/// which `Stm32u5xxDefaultPeripherals::init()` runs from the 16 MHz HSI.
+const PANIC_USART_DEFAULT_CLOCK: Hertz = Hertz::mhz(16);
 
 kernel::stack_size! {0x2000}
 
@@ -314,9 +319,11 @@ unsafe fn start() -> (
     let clocks = periphs.init();
 
     // Hand the kernel clock of `PANIC_USART` to the panic handler, which needs it to derive the same baud rate divisor as the driver
-    if let Some(clock) = clocks.ok().and_then(|clocks| clocks.usart1) {
+    if let Ok(Some(usart1_clock)) = clocks.map(|clocks| clocks.usart1) {
         let _ = PANIC_USART_CLOCK
-            .bind_to_thread::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(clock);
+            .bind_to_thread::<<ChipHw as kernel::platform::chip::Chip>::ThreadIdProvider>(
+                usart1_clock,
+            );
     }
 
     // Start the TIM2 timer, used for alarms

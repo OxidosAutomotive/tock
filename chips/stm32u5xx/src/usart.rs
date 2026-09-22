@@ -683,17 +683,16 @@ impl core::fmt::Write for UsartPanicWriter {
 /// if the normal kernel had initialized it differently.
 pub struct UsartPanicWriterConfig {
     pub registers: StaticRef<UsartRegisters>,
-    /// The frequency of the kernel clock feeding this USART, if the board knows
-    /// it
+    /// The frequency of the kernel clock feeding this USART
     ///
-    /// The baud rate divisor is computed from this, so it cannot be assumed:
+    /// Only used when the kernel did not set a baud rate before the panic, to
+    /// compute the divisor for `params`. It cannot be assumed by the chip, as
     /// boards are free to configure the clock tree however they like.
+    pub clock: Hertz,
+    /// The parameters to fall back to when the kernel did not set a baud rate
     ///
-    /// `None` means the clock tree was not configured yet, in which case the
-    /// baud rate cannot be derived, and whichever one the kernel had set is
-    /// kept. If it had not set one either, the panic writer discards its output
-    /// instead of polling a USART which will never transmit.
-    pub clock: Option<Hertz>,
+    /// A USART which the kernel already configured is used as is, so that the
+    /// panic output keeps the settings of the console it interrupts.
     pub params: uart::Parameters,
 }
 
@@ -711,28 +710,23 @@ impl PanicWriter for Usart<'_> {
         // writer polls out are not interleaved with DMA-driven ones.
         registers.cr3.modify(CR3::DMAT::CLEAR + CR3::DMAR::CLEAR);
 
-        match config.clock {
-            // Configure the USART correctly for panics. Unlike other chips, this
-            // does not go through `uart::Configure` on a fresh `Usart`, because
+        if registers.brr.read(BRR::BRR) >= Self::MIN_BRR {
+            // The kernel already set a baud rate, so the USART is configured.
+            // Keep that configuration and only make sure the transmitter is on
+            // and that no interrupts fire while the bytes are polled out.
+            registers.cr1.modify(
+                CR1::TE::SET
+                    + CR1::UE::SET
+                    + CR1::TXEIE::CLEAR
+                    + CR1::TCIE::CLEAR
+                    + CR1::RXNEIE::CLEAR,
+            );
+        } else {
+            // No baud rate was set yet, so configure the USART from the
+            // defaults the board provided. Unlike other chips, this does not go
+            // through `uart::Configure` on a fresh `Usart`, because
             // constructing one would claim another deferred call slot.
-            Some(clock) => {
-                let _ = Self::configure_registers(&registers, config.params, clock);
-            }
-            // Without the kernel clock frequency, no divisor can be computed. If
-            // one was set before the panic it is still in `BRR`, so keep it and
-            // only make sure the transmitter is on, rather than give up on
-            // output. The `params` baud rate is not honored in this case.
-            None => {
-                if registers.brr.read(BRR::BRR) >= Self::MIN_BRR {
-                    registers.cr1.modify(
-                        CR1::TE::SET
-                            + CR1::UE::SET
-                            + CR1::TXEIE::CLEAR
-                            + CR1::TCIE::CLEAR
-                            + CR1::RXNEIE::CLEAR,
-                    );
-                }
-            }
+            let _ = Self::configure_registers(&registers, config.params, config.clock);
         }
 
         // Polling the status flags of a USART which cannot transmit would spin
