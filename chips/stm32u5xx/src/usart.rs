@@ -730,11 +730,15 @@ impl PanicWriter for Usart<'_> {
         // If no reasonable baud rate could be set, or the USART is not enabled
         // (e.g. it is not clocked and its registers read as zero), ignore all
         // writes rather than spin forever polling its status flags.
-        let transmits =
+        let transmit_available =
             registers.brr.read(BRR::BRR) >= Self::MIN_BRR && registers.cr1.is_set(CR1::UE);
 
         UsartPanicWriter {
-            registers: if transmits { Some(registers) } else { None },
+            registers: if transmit_available {
+                Some(registers)
+            } else {
+                None
+            },
         }
     }
 }
