@@ -734,7 +734,7 @@ impl PanicWriter for Usart<'_> {
             registers.brr.read(BRR::BRR) >= Self::MIN_BRR && registers.cr1.is_set(CR1::UE);
 
         UsartPanicWriter {
-            registers: transmits.then_some(registers),
+            registers: if transmits { Some(registers) } else { None },
         }
     }
 }
