@@ -272,44 +272,40 @@ impl<'a> Usart<'a> {
 
         let (mul, brr_min, brr_max) = (1, Self::MIN_BRR, 0x1_0000);
 
-        let mut found_brr = false;
-        let mut over8 = false;
-
-        for &(presc, presc_fields_value) in &DIVS {
+        // Find the smallest prescaler which yields a divisor in range, along
+        // with the `BRR` value to write and whether it needs 8x oversampling.
+        // No prescaler at all means that even the largest one leaves the
+        // divisor too big, i.e. the baud rate is too low for this clock.
+        let Some(found) = DIVS.iter().find_map(|&(presc, presc_fields_value)| {
             let brr = Self::calculate_brr(baudrate, kernel_clock.0, presc as u32, mul);
 
             if brr < brr_min {
-                if brr * 2 >= brr_min {
-                    over8 = true;
-
-                    registers
-                        .brr
-                        .write(BRR::BRR.val(((brr << 1) & !0xF) | (brr & 0x07)));
-
-                    registers.presc.write(presc_fields_value);
-
-                    found_brr = true;
-                    break;
-                }
-
-                return Err(BaudrateError::TooHigh);
+                // Larger prescalers only make the divisor smaller, so
+                // this prescaler decides the outcome either way.
+                Some(if brr * 2 >= brr_min {
+                    Ok((((brr << 1) & !0xF) | (brr & 0x07), presc_fields_value, true))
+                } else {
+                    Err(BaudrateError::TooHigh)
+                })
+            } else if brr < brr_max {
+                Some(Ok((brr, presc_fields_value, false)))
+            } else {
+                None
             }
+        }) else {
+            return Err(BaudrateError::TooLow);
+        };
+        let (brr, presc, over8) = found?;
 
-            if brr < brr_max {
-                registers.brr.write(BRR::BRR.val(brr));
-                registers.presc.write(presc_fields_value);
-                found_brr = true;
-                break;
-            }
-        }
-
-        registers.cr1.modify(CR1::OVER8.val(over8 as u32));
-
-        if found_brr {
-            Ok(())
+        registers.brr.write(BRR::BRR.val(brr));
+        registers.presc.write(presc);
+        registers.cr1.modify(if over8 {
+            CR1::OVER8::SET
         } else {
-            Err(BaudrateError::TooLow)
-        }
+            CR1::OVER8::CLEAR
+        });
+
+        Ok(())
     }
 
     /// Bring the USART up for the given parameters and kernel clock frequency.
@@ -331,9 +327,8 @@ impl<'a> Usart<'a> {
         registers.cr1.modify(CR1::UE::CLEAR);
 
         // Set the baud rate
-        if Self::find_and_set_baudrate(registers, params.baud_rate, kernel_clock).is_err() {
-            return Err(kernel::ErrorCode::INVAL);
-        }
+        Self::find_and_set_baudrate(registers, params.baud_rate, kernel_clock)
+            .map_err(|_| kernel::ErrorCode::INVAL)?;
 
         registers.icr.write(
             ICR::TCCF::SET + ICR::ORECF::SET + ICR::NECF::SET + ICR::FECF::SET + ICR::PECF::SET,
@@ -654,20 +649,19 @@ impl<'a> uart::Receive<'a> for Usart<'a> {
 }
 
 struct UsartPanicWriter {
-    registers: StaticRef<UsartRegisters>,
-    /// Whether the USART is in a state where polling its status flags makes
-    /// progress. A writer which is not is a sink, as it cannot output anything.
-    transmits: bool,
+    /// If the panic writer cannot set a reasonable baud rate, or the USART is
+    /// not enabled, this is `None` and all writes are ignored. Polling the
+    /// status flags of such a USART would spin forever.
+    registers: Option<StaticRef<UsartRegisters>>,
 }
 
 impl IoWrite for UsartPanicWriter {
     fn write(&mut self, buf: &[u8]) -> usize {
-        if !self.transmits {
+        let Some(regs) = self.registers else {
             return 0;
-        }
+        };
 
         for &byte in buf {
-            let regs = &*self.registers;
             while !regs.isr.is_set(ISR::TXE) {}
             regs.tdr.write(TDR::TDR.val(byte as u32));
             while !regs.isr.is_set(ISR::TC) {}
@@ -726,19 +720,21 @@ impl PanicWriter for Usart<'_> {
             // and the default kernel clock. Unlike other chips, this does not
             // go through `uart::Configure` on a fresh `Usart`, because
             // constructing one would claim another deferred call slot.
+            //
+            // The result is not needed: the check below reads the outcome back
+            // from the hardware, which also catches an unclocked USART that
+            // ignored the writes even though they "succeeded".
             let _ = Self::configure_registers(&registers, config.params, Self::PANIC_DEFAULT_CLOCK);
         }
 
-        // Polling the status flags of a USART which cannot transmit would spin
-        // forever, taking the rest of the panic handler with it. That is the
-        // case if no valid divisor ever reached the peripheral, or if it is not
-        // even clocked, in which case its registers read as zero.
+        // If no reasonable baud rate could be set, or the USART is not enabled
+        // (e.g. it is not clocked and its registers read as zero), ignore all
+        // writes rather than spin forever polling its status flags.
         let transmits =
             registers.brr.read(BRR::BRR) >= Self::MIN_BRR && registers.cr1.is_set(CR1::UE);
 
         UsartPanicWriter {
-            registers,
-            transmits,
+            registers: transmits.then_some(registers),
         }
     }
 }
