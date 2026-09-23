@@ -651,7 +651,7 @@ impl<'a> uart::Receive<'a> for Usart<'a> {
 struct UsartPanicWriter {
     /// If the panic writer cannot set a reasonable baud rate, or the USART is
     /// not enabled, this is `None` and all writes are ignored. Polling the
-    /// status flags of such a USART would spin forever.
+    /// status flags a disabled USART would spin forever.
     registers: Option<StaticRef<UsartRegisters>>,
 }
 
