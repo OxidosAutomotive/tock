@@ -478,7 +478,11 @@ impl<H: crypto::digest::Hmac> Client for TestHkdf<H> {
                                 - (self.okm_offset.get() % self.algorithm.get().get_digest_len());
                             let read = self.read_okm(&mut input[..ceil])?;
                             offset += read;
-                            if self.okm_offset.get() % self.algorithm.get().get_digest_len() == 0 {
+                            if self
+                                .okm_offset
+                                .get()
+                                .is_multiple_of(self.algorithm.get().get_digest_len())
+                            {
                                 current_substage = if self.info_len.get() == 0 {
                                     Substage::Index
                                 } else {
