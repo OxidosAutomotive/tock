@@ -66,7 +66,7 @@ pub trait AES<'a, K: AESKeySize> {
     ///
     /// If an encryption operation is in progress, this method instead
     /// has no effect.
-    fn start_message(&self);
+    fn start_message(&self, len: Option<usize>);
 
     /// Request an encryption/decryption
     ///

@@ -484,7 +484,7 @@ impl<'a, K: AESKeySize> kernel::hil::symmetric_encryption::AES<'a, K> for Aes<'a
         Ok(())
     }
 
-    fn start_message(&self) {}
+    fn start_message(&self, _len: Option<usize>) {}
 
     fn crypt(
         &self,

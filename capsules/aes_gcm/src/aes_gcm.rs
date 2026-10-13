@@ -83,7 +83,7 @@ impl<'a, A: AES<'a, AES128> + AESCtr + AESCBC + AESECB + AESCCM<'a, AES128>> Aes
 
         self.aes.set_iv(&self.iv.get()).unwrap();
 
-        self.aes.start_message();
+        self.aes.start_message(None);
         let crypt_buf = self.crypt_buf.take().unwrap();
         let (_aad_offset, message_offset, message_len) = self.pos.get();
 
@@ -123,7 +123,7 @@ impl<'a, A: AES<'a, AES128> + AESCtr + AESCBC + AESECB + AESCCM<'a, AES128>> Aes
         AES::set_key(self.aes, &self.key.get()).unwrap();
         self.aes.set_iv(&[0; AES_BLOCK_SIZE]).unwrap();
 
-        self.aes.start_message();
+        self.aes.start_message(None);
         let crypt_buf = self.crypt_buf.take().unwrap();
 
         for i in 0..AES_BLOCK_SIZE {
@@ -241,8 +241,8 @@ impl<'a, A: AES<'a, AES128> + AESCtr + AESCBC + AESECB + AESCCM<'a, AES128>>
         self.aes.set_iv(iv)
     }
 
-    fn start_message(&self) {
-        self.aes.start_message()
+    fn start_message(&self, _len: Option<usize>) {
+        self.aes.start_message(None)
     }
 
     fn crypt(
