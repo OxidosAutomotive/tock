@@ -458,7 +458,7 @@ impl<'a> hil::symmetric_encryption::AES<'a, AES128> for Aes<'a> {
         Ok(())
     }
 
-    fn start_message(&self) {
+    fn start_message(&self, _len: Option<usize>) {
         if self.busy() {
             return;
         }
