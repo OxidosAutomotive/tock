@@ -18,7 +18,7 @@ use kernel::utilities::leasable_buffer::SubSliceMut;
 use kernel::{ErrorCode, ProcessId};
 
 /// Syscall driver number.
-pub const DRIVER_NUM: usize = driver::NUM::Sha as usize;
+pub const DRIVER_NUM: usize = driver::NUM::Hash as usize;
 
 /// Upcalls for SHA operations completing.
 mod upcall {
