@@ -53,8 +53,9 @@ pub enum NUM {
     Crc                   = 0x40002,
     Hmac                  = 0x40003,
     CtapHid               = 0x40004,
-    Sha                   = 0x40005,
+    Hash                  = 0x40005,
     Aes                   = 0x40006,
+    Hkdf                  = 0x40007,
 
     // Storage
     AppFlash              = 0x50000,

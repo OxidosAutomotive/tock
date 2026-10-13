@@ -83,6 +83,7 @@ members = [
     "capsules/core",
     "capsules/extra",
     "capsules/system",
+    "capsules/crypto",
     "chips/apollo3",
     "chips/arty_e21_chip",
     "chips/e310_g002",
