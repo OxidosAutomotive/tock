@@ -11,6 +11,7 @@ edition = "2024"
 [dependencies]
 kernel = { path = "../../kernel" }
 capsules-core = { path = "../core" }
+capsules-crypto = { path = "../crypto" }
 p256 = { version = "0.13.0", default-features = false, features = ["ecdsa"] }
 
 [lints]

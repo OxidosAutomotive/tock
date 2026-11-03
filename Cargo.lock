@@ -342,6 +342,7 @@ name = "ecdsa-sw"
 version = "0.2.4-dev"
 dependencies = [
  "capsules-core",
+ "capsules-crypto",
  "kernel",
  "p256",
 ]
