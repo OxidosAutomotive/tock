@@ -9,4 +9,5 @@ pub mod hash;
 pub mod hkdf;
 pub mod hmac;
 pub mod public_key;
+pub mod sign;
 pub mod test;
