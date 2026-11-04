@@ -56,9 +56,9 @@ mod rw_allow {
 
 #[derive(Clone, Copy)]
 enum Operation {
-    Sign,
-    SetPrivateKey,
-    GetPublicKey,
+    Sign = 0,
+    SetPrivateKey = 1,
+    GetPublicKey = 2,
 }
 
 impl Operation {
