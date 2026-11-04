@@ -1,3 +1,7 @@
+// Licensed under the Apache License, Version 2.0 or the MIT License.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright Tock Contributors 2026.
+
 use core::cell::Cell;
 
 use capsules_core::driver_mutex::{
@@ -94,7 +98,7 @@ enum State {
 ///
 /// The underlying signer is protected by a `DriverMutex` so multiple
 /// capsules can share the same signing hardware.
-pub struct Dsa<S, const HL: usize, const SL: usize, const KL: usize, const PL: usize>
+pub struct Signer<S, const HL: usize, const SL: usize, const KL: usize, const PL: usize>
 where
     S: SignatureSign<'static, HL, SL>
         + SetKeyBySlice<'static, KL>
@@ -102,9 +106,9 @@ where
         + 'static,
 {
     /// Underlying signer to use for the sign operations.
-    dsa_mutex: &'static DriverMutex<S>,
-    dsa_handle: OptionalCell<DriverMutexHandle>,
-    dsa: MapCell<DriverMutexRef<S>>,
+    signer_mutex: &'static DriverMutex<S>,
+    signer_handle: OptionalCell<DriverMutexHandle>,
+    signer: MapCell<DriverMutexRef<S>>,
     /// Kernel-owned buffer containing the hash passed to the HIL.
     ///
     /// This is necessary because `SignatureSign::sign()` requires
@@ -135,7 +139,8 @@ where
     state: Cell<State>,
 }
 
-impl<S, const HL: usize, const SL: usize, const KL: usize, const PL: usize> Dsa<S, HL, SL, KL, PL>
+impl<S, const HL: usize, const SL: usize, const KL: usize, const PL: usize>
+    Signer<S, HL, SL, KL, PL>
 where
     S: SignatureSign<'static, HL, SL>
         + SetKeyBySlice<'static, KL>
@@ -143,7 +148,7 @@ where
         + 'static,
 {
     pub fn new(
-        dsa_mutex: &'static DriverMutex<S>,
+        signer_mutex: &'static DriverMutex<S>,
         hash: &'static mut [u8; HL],
         signature: &'static mut [u8; SL],
         private_key: &'static mut [u8; KL],
@@ -155,10 +160,10 @@ where
             AllowRwCount<{ rw_allow::COUNT }>,
         >,
     ) -> Self {
-        Dsa {
-            dsa_mutex,
-            dsa_handle: OptionalCell::empty(),
-            dsa: MapCell::empty(),
+        Signer {
+            signer_mutex,
+            signer_handle: OptionalCell::empty(),
+            signer: MapCell::empty(),
             hash: MapCell::new(hash),
             signature: MapCell::new(signature),
             private_key: MapCell::new(private_key),
@@ -170,13 +175,13 @@ where
 
     /// Register this capsule as a client of the DriverMutex.
     pub fn register(&'static self) -> Result<(), ErrorCode> {
-        if self.dsa_handle.is_some() {
+        if self.signer_handle.is_some() {
             return Err(ErrorCode::ALREADY);
         }
 
-        let handle = self.dsa_mutex.add_client(self).ok_or(ErrorCode::NOMEM)?;
+        let handle = self.signer_mutex.add_client(self).ok_or(ErrorCode::NOMEM)?;
 
-        self.dsa_handle.set(handle);
+        self.signer_handle.set(handle);
 
         Ok(())
     }
@@ -250,7 +255,7 @@ where
         if !matches!(self.state.get(), State::Idle) {
             return Err(ErrorCode::BUSY);
         }
-        if self.dsa_handle.is_none() {
+        if self.signer_handle.is_none() {
             return Err(ErrorCode::OFF);
         }
 
@@ -286,9 +291,9 @@ where
             operation,
         });
 
-        let result = self
-            .dsa_handle
-            .map_or(Err(ErrorCode::OFF), |handle| self.dsa_mutex.request(handle));
+        let result = self.signer_handle.map_or(Err(ErrorCode::OFF), |handle| {
+            self.signer_mutex.request(handle)
+        });
 
         if let Err(error) = result {
             self.state.set(State::Idle);
@@ -299,8 +304,8 @@ where
     }
 
     /// Copy the userspace hash into the kernel buffer and start signing.
-    fn start_sign(&'static self, dsa: &S) -> Result<(), ErrorCode> {
-        dsa.set_sign_client(self);
+    fn start_sign(&'static self, signer: &S) -> Result<(), ErrorCode> {
+        signer.set_sign_client(self);
 
         //
         // Take the kernel-owned buffers.
@@ -330,7 +335,8 @@ where
             return Err(error);
         }
 
-        dsa.sign(hash, signature)
+        signer
+            .sign(hash, signature)
             .map_err(|(error, hash, signature)| {
                 self.hash.put(hash);
                 self.signature.put(signature);
@@ -340,8 +346,8 @@ where
 
     /// Copy the userspace private key into the kernel buffer and load it
     /// into the signer.
-    fn start_set_private_key(&'static self, dsa: &S) -> Result<(), ErrorCode> {
-        dsa.set_client(self);
+    fn start_set_private_key(&'static self, signer: &S) -> Result<(), ErrorCode> {
+        signer.set_client(self);
 
         let key = self.private_key.take().ok_or(ErrorCode::FAIL)?;
 
@@ -351,7 +357,7 @@ where
             return Err(error);
         }
 
-        dsa.set_key(key).map_err(|(error, key)| {
+        signer.set_key(key).map_err(|(error, key)| {
             key.fill(0);
             self.private_key.put(key);
             error
@@ -359,12 +365,13 @@ where
     }
 
     /// Ask the signer for the public key of the loaded private key.
-    fn start_get_public_key(&'static self, dsa: &S) -> Result<(), ErrorCode> {
-        dsa.set_public_key_client(self);
+    fn start_get_public_key(&'static self, signer: &S) -> Result<(), ErrorCode> {
+        signer.set_public_key_client(self);
 
         let public_key = self.public_key.take().ok_or(ErrorCode::FAIL)?;
 
-        dsa.get_public_key(public_key)
+        signer
+            .get_public_key(public_key)
             .map_err(|(error, public_key)| {
                 self.public_key.put(public_key);
                 error
@@ -381,7 +388,7 @@ where
         // Drop our reference to the underlying signer.
         //
         // This returns the resource to the DriverMutex.
-        self.dsa.take();
+        self.signer.take();
 
         let (processid, operation) = match state {
             State::Waiting {
@@ -406,7 +413,7 @@ where
 }
 
 impl<S, const HL: usize, const SL: usize, const KL: usize, const PL: usize> DriverMutexClient
-    for Dsa<S, HL, SL, KL, PL>
+    for Signer<S, HL, SL, KL, PL>
 where
     S: SignatureSign<'static, HL, SL>
         + SetKeyBySlice<'static, KL>
@@ -432,8 +439,8 @@ where
             operation,
         });
 
-        let dsa = match resource.downcast::<S>() {
-            Ok(dsa) => dsa,
+        let signer = match resource.downcast::<S>() {
+            Ok(signer) => signer,
             Err(_) => return self.finish(Err(ErrorCode::INVAL)),
         };
 
@@ -444,13 +451,13 @@ where
         // and returns them through the matching client callback.
         //
         let result = match operation {
-            Operation::Sign => self.start_sign(&dsa),
-            Operation::SetPrivateKey => self.start_set_private_key(&dsa),
-            Operation::GetPublicKey => self.start_get_public_key(&dsa),
+            Operation::Sign => self.start_sign(&signer),
+            Operation::SetPrivateKey => self.start_set_private_key(&signer),
+            Operation::GetPublicKey => self.start_get_public_key(&signer),
         };
 
         // Store our reference to the underlying signer.
-        self.dsa.put(dsa);
+        self.signer.put(signer);
 
         if let Err(error) = result {
             self.finish(Err(error));
@@ -459,7 +466,7 @@ where
 }
 
 impl<S, const HL: usize, const SL: usize, const KL: usize, const PL: usize> ClientSign<HL, SL>
-    for Dsa<S, HL, SL, KL, PL>
+    for Signer<S, HL, SL, KL, PL>
 where
     S: SignatureSign<'static, HL, SL>
         + SetKeyBySlice<'static, KL>
@@ -489,7 +496,7 @@ where
 }
 
 impl<S, const HL: usize, const SL: usize, const KL: usize, const PL: usize> SetKeyBySliceClient<KL>
-    for Dsa<S, HL, SL, KL, PL>
+    for Signer<S, HL, SL, KL, PL>
 where
     S: SignatureSign<'static, HL, SL>
         + SetKeyBySlice<'static, KL>
@@ -507,7 +514,7 @@ where
 }
 
 impl<S, const HL: usize, const SL: usize, const KL: usize, const PL: usize> GetPublicKeyClient<PL>
-    for Dsa<S, HL, SL, KL, PL>
+    for Signer<S, HL, SL, KL, PL>
 where
     S: SignatureSign<'static, HL, SL>
         + SetKeyBySlice<'static, KL>
@@ -529,7 +536,7 @@ where
 }
 
 impl<S, const HL: usize, const SL: usize, const KL: usize, const PL: usize> SyscallDriver
-    for Dsa<S, HL, SL, KL, PL>
+    for Signer<S, HL, SL, KL, PL>
 where
     S: SignatureSign<'static, HL, SL>
         + SetKeyBySlice<'static, KL>
