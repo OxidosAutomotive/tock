@@ -6,6 +6,7 @@
 #![no_std]
 #![no_main]
 
+use capsules_extra::tester::{BUF_SIZE, Buf, MpuRegionTest, NUM_BUFS};
 use components::hmac_component_static;
 use kernel::capabilities::{self, MemoryAllocationCapability};
 use kernel::component::Component;
@@ -44,7 +45,8 @@ static PANIC_RESOURCES: SingleThreadValue<PanicResources<ChipHw, ProcessPrinterI
 /// The USART the panic handler in io.rs writes to, which is the one the console
 /// uses.
 const PANIC_USART: StaticRef<UsartRegisters> = USART1_BASE;
-
+struct MpuTestCap;
+unsafe impl capabilities::ProcessManagementCapability for MpuTestCap {}
 kernel::stack_size! {0x2000}
 
 struct NucleoU545RE {
@@ -89,6 +91,7 @@ struct NucleoU545RE {
     i2c: &'static capsules_core::i2c_master::I2CMasterDriver<'static, stm32u545::i2c::I2c<'static>>,
     date_time:
         &'static capsules_extra::date_time::DateTimeCapsule<'static, stm32u545::rtc::Rtc<'static>>,
+    mpu_tester: &'static MpuRegionTest<MpuTestCap>,
 }
 
 impl SyscallDriverLookup for NucleoU545RE {
@@ -111,6 +114,7 @@ impl SyscallDriverLookup for NucleoU545RE {
             capsules_core::spi_controller::DRIVER_NUM => f(Some(self.spi)),
             capsules_core::i2c_master::DRIVER_NUM => f(Some(self.i2c)),
             capsules_extra::date_time::DRIVER_NUM => f(Some(self.date_time)),
+            capsules_extra::tester::DRIVER_NUM => f(Some(self.mpu_tester)),
             _ => f(None),
         }
     }
@@ -592,6 +596,11 @@ unsafe fn start() -> (
     .finalize(components::i2c_master_driver_component_static!(
         stm32u545::i2c::I2c
     ));
+    let mpu_bufs = static_init!([Buf; NUM_BUFS], [Buf([0; BUF_SIZE]); NUM_BUFS]);
+    let mpu_tester = static_init!(
+        MpuRegionTest<MpuTestCap>,
+        MpuRegionTest::new(board_kernel, MpuTestCap, mpu_bufs)
+    );
 
     // Platform and Interrupts
     let platform = static_init!(
@@ -614,6 +623,7 @@ unsafe fn start() -> (
             aes: aes_driver,
             spi,
             date_time,
+            mpu_tester,
         }
     );
 
@@ -654,7 +664,7 @@ unsafe fn start() -> (
         chip,
         app_flash,
         app_memory,
-        &capsules_system::process_policies::PanicFaultPolicy {},
+        &capsules_system::process_policies::RestartWithDebugFaultPolicy {},
         &create_capability!(capabilities::ProcessManagementCapability),
     );
 

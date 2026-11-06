@@ -112,6 +112,7 @@ pub mod syscall_return_test;
 pub mod temperature;
 pub mod temperature_rp2040;
 pub mod temperature_stm;
+pub mod tester;
 pub mod text_screen;
 pub mod tickv;
 pub mod tickv_kv_store;
