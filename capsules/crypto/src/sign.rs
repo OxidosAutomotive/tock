@@ -61,17 +61,17 @@ enum Operation {
     GetPublicKey = 2,
 }
 
-impl Operation {
-    /// The command number that started this operation, reported to
-    /// userspace as the second upcall argument.
-    fn command_num(self) -> usize {
-        match self {
-            Operation::Sign => cmd::SIGN,
-            Operation::SetPrivateKey => cmd::SET_PRIVATE_KEY,
-            Operation::GetPublicKey => cmd::GET_PUBLIC_KEY,
-        }
-    }
-}
+// impl Operation {
+//     /// The command number that started this operation, reported to
+//     /// userspace as the second upcall argument.
+//     fn command_num(self) -> usize {
+//         match self {
+//             Operation::Sign => cmd::SIGN,
+//             Operation::SetPrivateKey => cmd::SET_PRIVATE_KEY,
+//             Operation::GetPublicKey => cmd::GET_PUBLIC_KEY,
+//         }
+//     }
+// }
 
 #[derive(Clone, Copy)]
 enum State {
@@ -406,7 +406,7 @@ where
         let _ = self.apps.enter(processid, |_, kernel_data| {
             let _ = kernel_data.schedule_upcall(
                 upcall::DONE,
-                (into_statuscode(result), operation.command_num(), 0),
+                (into_statuscode(result), operation as usize, 0),
             );
         });
     }
