@@ -61,18 +61,6 @@ enum Operation {
     GetPublicKey = 2,
 }
 
-// impl Operation {
-//     /// The command number that started this operation, reported to
-//     /// userspace as the second upcall argument.
-//     fn command_num(self) -> usize {
-//         match self {
-//             Operation::Sign => cmd::SIGN,
-//             Operation::SetPrivateKey => cmd::SET_PRIVATE_KEY,
-//             Operation::GetPublicKey => cmd::GET_PUBLIC_KEY,
-//         }
-//     }
-// }
-
 #[derive(Clone, Copy)]
 enum State {
     Idle,
