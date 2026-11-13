@@ -79,3 +79,5 @@
 
 pub mod cipher;
 pub mod digest;
+pub mod ecc;
+pub mod modular_arithmetic;
