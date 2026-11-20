@@ -90,6 +90,7 @@ pub enum NUM {
     Hash                  = 0x40005,
     Aes                   = 0x40006,
     Hkdf                  = 0x40007,
+    Signer                = 0x40008,
 
     // Storage
     AppFlash              = 0x50000,
