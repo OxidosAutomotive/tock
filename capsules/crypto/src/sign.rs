@@ -4,8 +4,11 @@
 
 use core::cell::Cell;
 
-use capsules_core::driver_mutex::{
-    DriverMutex, DriverMutexAny, DriverMutexClient, DriverMutexHandle, DriverMutexRef,
+use capsules_core::{
+    driver,
+    driver_mutex::{
+        DriverMutex, DriverMutexAny, DriverMutexClient, DriverMutexHandle, DriverMutexRef,
+    },
 };
 use kernel::{
     ErrorCode, ProcessId,
@@ -19,6 +22,9 @@ use kernel::{
 };
 
 use crate::public_key::{GetPublicKey, GetPublicKeyClient};
+
+/// Syscall driver number.
+pub const DRIVER_NUM: usize = driver::NUM::Signer as usize;
 
 /// Command numbers
 mod cmd {
