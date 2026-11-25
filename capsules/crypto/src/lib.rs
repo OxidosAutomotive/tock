@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 #![no_std]
 
+pub mod ecdsa;
 pub mod hash;
 pub mod hkdf;
 pub mod hmac;
