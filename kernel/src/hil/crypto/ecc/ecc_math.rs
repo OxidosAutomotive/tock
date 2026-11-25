@@ -3,7 +3,7 @@
 // Copyright OxidOS Automotive 2026
 
 //! Interface for Math Operations on Elliptic Curves
-
+//!
 //! # Data format
 //!
 //! All integers (scalars, coordinates, moduli, operands and results) are
@@ -14,84 +14,118 @@
 //! Field elements and scalars are fixed-width: exactly `P_SIZE` bytes,
 //! left-padded with zeros. Leading zero bytes must not be stripped.
 //!
-//! Elliptic curve points are exchanged in uncompressed form as a single buffer
+//! Elliptic curve points are read in uncompressed form as a single stream
 //! of `2 * P_SIZE` bytes, `x || y`: the x coordinate in the first `P_SIZE`
-//! bytes, followed by the y coordinate.
+//! bytes, followed by the y coordinate. Resulting points are written as two
+//! separate `P_SIZE` arrays, `x` and `y`.
+//!
+//! # Data movement
+//!
+//! Input and output follow the
+//! [crypto data movement contract](super#callback-oriented-data-movement).
+//! The client owns all buffers. To supply input, the client passes its
+//! unconsumed bytes to a driver-provided `sink`, which absorbs a prefix and
+//! returns how many bytes it took. To receive output, the client calls a
+//! driver-provided `fill` closure with storage that the driver overwrites.
 
-use crate::{ErrorCode, hil::crypto::ecc::ecc_constants::Curve};
+use crate::{
+    ErrorCode, hil::crypto::ecc::ecc_constants::Curve, processbuffer::ReadableProcessSlice,
+};
 
-/// Client callback interface for the `EccCrypto` trait.
-pub trait EccClient {
-    /// Retrieve scalar.
+/// Client callbacks for [`EccCrypto`] and [`VerifyEccPoint`] operations.
+pub trait EccClient<const P_SIZE: usize, C: Curve<P_SIZE>> {
+    /// Supply the scalar for [`EccCrypto::scalar_multiplication`].
     ///
-    /// The driver may issue this callback multiple times, but must not request more than
-    /// `P_SIZE` bytes
-    fn read_scalar(&self, scalar: &mut [u8]) -> Result<(), ErrorCode>;
+    /// The client passes the unconsumed bytes of the scalar to `sink`, which absorbs a
+    /// portion of the slice and returns the number of bytes consumed. A driver may issue this
+    /// callback multiple times. The total number of bytes consumed must equal `P_SIZE`.
+    /// Each call must consume between one byte and the length of the slice passed to `sink`;
+    /// a zero or oversized count terminates the operation with [`ErrorCode::SIZE`].
+    fn read_scalar(
+        &self,
+        sink: &mut dyn FnMut(&ReadableProcessSlice) -> Result<usize, ErrorCode>,
+    ) -> Result<(), ErrorCode>;
 
-    /// Retrieve the point for the operation.
+    /// Supply the (first) input point, as `x || y`.
     ///
-    /// The driver may issue this callback multiple times, but must not request more than
-    /// 2 * `P_SIZE` bytes
-    fn read_point(&self, point: &mut [u8]) -> Result<(), ErrorCode>;
+    /// Same rules as [`EccClient::read_scalar`], except that the total number of bytes
+    /// consumed must equal `2 * P_SIZE`.
+    fn read_point(
+        &self,
+        sink: &mut dyn FnMut(&ReadableProcessSlice) -> Result<usize, ErrorCode>,
+    ) -> Result<(), ErrorCode>;
 
-    /// Retrieve the second point for the `point_addition`.
+    /// Supply the second input point for [`EccCrypto::point_addition`], as `x || y`.
     ///
-    /// The driver may issue this callback multiple times, but must not request more than
-    /// 2 * `P_SIZE` bytes
-    fn read_second_point(&self, point: &mut [u8]) -> Result<(), ErrorCode>;
+    /// Same rules as [`EccClient::read_point`]. The driver may interleave calls to this
+    /// callback with calls to [`EccClient::read_point`]; each stream is consumed in order.
+    fn read_second_point(
+        &self,
+        sink: &mut dyn FnMut(&ReadableProcessSlice) -> Result<usize, ErrorCode>,
+    ) -> Result<(), ErrorCode>;
 
-    /// Return resulting point.
+    /// Return the resulting point.
     ///
-    /// Across all calls, the driver must return exactly 2 * `P_SIZE` bytes in input order.
-    fn write_point(&self, point: &[u8]) -> Result<(), ErrorCode>;
+    /// The driver must call this exactly once, after it has taken all input and before
+    /// signaling successful completion. The client calls `fill` exactly once with storage for
+    /// the x and y coordinates. `fill` overwrites both arrays completely.
+    fn write_point(
+        &self,
+        fill: &mut dyn FnMut(&mut [u8; P_SIZE], &mut [u8; P_SIZE]),
+    ) -> Result<(), ErrorCode>;
 
     /// Signal completion of an elliptic curve operation.
     ///
-    /// This callback occurs exactly once after a request accepted by `EccCrypto`. If a data
-    /// callback returns an error, the driver must abort and report that error through `result`.
+    /// This callback occurs exactly once after a request accepted by [`EccCrypto`] or
+    /// [`VerifyEccPoint`]. If a data callback returns an error, the driver must immediately
+    /// abort the operation and report that error through `result`.
     fn operation_done(&self, result: Result<(), ErrorCode>);
 }
 
+/// Elliptic curve point arithmetic on curve `C`.
 pub trait EccCrypto<'a, const P_SIZE: usize, C: Curve<P_SIZE>> {
-    /// Set the `Client` client to be called on completion.
-    fn set_client(&self, client: &'a dyn EccClient);
+    /// Set the client that will receive callbacks for operations.
+    fn set_client(&self, client: &'a dyn EccClient<P_SIZE, C>);
 
-    /// Initiate a point addition operation
+    /// Initiate a point addition operation.
     ///
-    /// The input is retrieved through `Client` callbacks, specifically one `read_point()`
-    /// callback and one`read_second_point()`, each reading 2 * `P_SIZE` bytes. The driver
-    /// returns exactly2 * `P_SIZE` bytes of output through the `write_point()` callback,
-    /// then issues exactlyone `EccClient::operation_done` callback.
+    /// The operands are retrieved through [`EccClient::read_point`] and
+    /// [`EccClient::read_second_point`]. The sum is returned through
+    /// [`EccClient::write_point`], followed by exactly one [`EccClient::operation_done`]
+    /// callback. Callbacks must not occur before this method returns.
     ///
-    /// Returns `ErrorCode::BUSY` if an operation is in progress
-    /// On `Ok(())`, a completion callback will occur. On `Err`, no callbacks will occur for this
-    /// request.
+    /// Returns [`ErrorCode::BUSY`] if an operation is already in progress, or
+    /// [`ErrorCode::RESERVE`] if no client is registered. On `Ok(())`, a completion callback
+    /// will occur. On `Err`, no callbacks will occur for this request.
     fn point_addition(&self) -> Result<(), ErrorCode>;
 
-    /// Initiate a scalar multiplication operation
+    /// Initiate a scalar multiplication operation.
     ///
-    /// The input is retrieved through `Client` callbacks, specifically one `read_point()`
-    /// callback and one `read_scalar()` callback. The driver returns exactly 2 * `P_SIZE`
-    /// bytes of output through the `write_point()` callback, then issues exactly one
-    /// `EccClient::operation_done` callback.
+    /// The operands are retrieved through [`EccClient::read_point`] and
+    /// [`EccClient::read_scalar`]. The product is returned through
+    /// [`EccClient::write_point`], followed by exactly one [`EccClient::operation_done`]
+    /// callback. Callbacks must not occur before this method returns.
     ///
-    /// Returns `ErrorCode::BUSY` if an operation is in progress
-    /// On `Ok(())`, a completion callback will occur. On `Err`, no callbacks will occur for this
-    /// request.
+    /// Returns [`ErrorCode::BUSY`] if an operation is already in progress, or
+    /// [`ErrorCode::RESERVE`] if no client is registered. On `Ok(())`, a completion callback
+    /// will occur. On `Err`, no callbacks will occur for this request.
     fn scalar_multiplication(&self) -> Result<(), ErrorCode>;
 }
 
+/// Checks whether a point lies on curve `C`.
 pub trait VerifyEccPoint<'a, const P_SIZE: usize, C: Curve<P_SIZE>>:
     EccCrypto<'a, P_SIZE, C>
 {
-    /// Initiate a point verification operation
+    /// Initiate a point verification operation.
     ///
-    /// The input is retrieved through `Client` callbacks. The driver will call
-    /// `operation_done`, where result will either be `Ok(())` if the point is on the elliptic
-    /// curve, or `ErrorCode::Inval` if it is not.
+    /// The point is retrieved through [`EccClient::read_point`]. No output is written:
+    /// [`EccClient::write_point`] is not called. The driver then issues exactly one
+    /// [`EccClient::operation_done`] callback, with `Ok(())` if the point is on the curve
+    /// or [`ErrorCode::INVAL`] if it is not. Callbacks must not occur before this method
+    /// returns.
     ///
-    /// Returns `ErrorCode::BUSY` if an operation is in progress
-    /// On `Ok(())`, a completion callback will occur. On `Err`, no callbacks will occur for this
-    /// request.
+    /// Returns [`ErrorCode::BUSY`] if an operation is already in progress, or
+    /// [`ErrorCode::RESERVE`] if no client is registered. On `Ok(())`, a completion callback
+    /// will occur. On `Err`, no callbacks will occur for this request.
     fn verify_point(&self) -> Result<(), ErrorCode>;
 }

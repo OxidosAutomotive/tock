@@ -17,14 +17,39 @@
 //! Every number is exactly `modulus_len` bytes long, left-padded with zeros.
 //! Leading zero bytes must not be stripped, including from the modulus.
 //!
+//! # Data movement
+//!
+//! The client owns all buffers; the driver never lends the client a buffer.
+//!
+//! - **Input.** In [`read_modulus`](MathClient::read_modulus),
+//!   [`read_number`](MathClient::read_number) and
+//!   [`read_second_number`](MathClient::read_second_number), the driver passes
+//!   a `sink`. The client calls `sink` exactly once with *all* bytes of that
+//!   number it has not yet supplied. `sink` absorbs a prefix of the slice and
+//!   returns how many bytes it took.
+//! - **Output.** In [`write_number`](MathClient::write_number), the driver
+//!   passes a `source`. The client calls `source` exactly once with *all* of
+//!   its result storage that has not yet been written. `source` writes a prefix
+//!   of the slice and returns how many bytes it wrote.
+//!
+//! In both directions the client advances its position for that number by the
+//! returned count. If the closure returns an error, the client returns that
+//! same error from the callback. If the count is zero or larger than the slice
+//! it was given, the client returns [`ErrorCode::SIZE`]. A callback that
+//! returns `Ok(())` without calling its closure is treated by the driver as
+//! [`ErrorCode::FAIL`].
+//!
+//! Because the client always offers every remaining byte, a driver may consume
+//! in units that suit its hardware (for example whole 32-bit words) and take
+//! the remainder in the last call.
+//!
 //! # Chunked transfer
 //!
-//! Numbers may be exchanged in several chunks, so that drivers do not need a
-//! buffer large enough to hold a whole number. The driver chooses the chunk
-//! sizes, which need not be equal. For each number:
+//! The driver chooses how many bytes each call moves, so it never needs a
+//! buffer large enough to hold a whole number. For each number:
 //!
-//! - chunks are transferred in order, starting from the most significant end,
-//!   so concatenating them yields the full big-endian number;
+//! - bytes are transferred in order, starting from the most significant end,
+//!   so concatenating the chunks yields the full big-endian number;
 //! - every byte is transferred exactly once, so the chunks of one number add up
 //!   to exactly `modulus_len` bytes.
 //!
@@ -48,10 +73,14 @@
 //!
 //! For the modulo operation, `a` may be any `modulus_len`-byte value. For all
 //! other operations, operands must be less than `m`; a driver may reject larger
-//! operands or produce an unspecified result. Inverse and division fail if the
-//! value to invert has no inverse modulo `m`.
+//! operands with [`ErrorCode::INVAL`] or produce an unspecified result. Inverse
+//! and division complete with [`ErrorCode::INVAL`] if the value to invert has
+//! no inverse modulo `m`.
 
-use crate::ErrorCode;
+use crate::{
+    ErrorCode,
+    processbuffer::{ReadableProcessSlice, WriteableProcessSlice},
+};
 
 /// Constructor for the addition operation of a driver-defined operation type.
 ///
@@ -87,42 +116,48 @@ pub trait OpModulo {
     fn modulo() -> Self;
 }
 
-/// Client callback interface for the [`ModularArithmetic`] trait.
+/// Client callbacks for [`ModularArithmetic`] operations.
+///
+/// See the [data movement](self#data-movement) rules, which apply to every
+/// data callback below.
 pub trait MathClient<Op> {
-    /// Retrieve modulus.
+    /// Supply the next bytes of the modulus `m`.
     ///
-    /// The client fills all of `modulus` with the next `modulus.len()` bytes of
-    /// the modulus. The driver may call this several times, but requests exactly
-    /// `modulus_len` bytes in total.
-    ///
-    /// Returning an error aborts the operation; see
-    /// [`computation_completed`](Self::computation_completed).
-    fn read_modulus(&self, modulus: &mut [u8]) -> Result<(), ErrorCode>;
+    /// The driver may call this several times; in total it consumes exactly
+    /// `modulus_len` bytes.
+    fn read_modulus(
+        &self,
+        sink: &mut dyn FnMut(&ReadableProcessSlice) -> Result<usize, ErrorCode>,
+    ) -> Result<(), ErrorCode>;
 
-    /// Retrieve first operand.
+    /// Supply the next bytes of the first operand `a`.
     ///
-    /// The client fills all of `num` with the next `num.len()` bytes of `a`. The
-    /// driver may call this several times, but requests exactly `modulus_len`
-    /// bytes in total.
-    fn read_number(&self, num: &mut [u8]);
+    /// The driver may call this several times; in total it consumes exactly
+    /// `modulus_len` bytes.
+    fn read_number(
+        &self,
+        sink: &mut dyn FnMut(&ReadableProcessSlice) -> Result<usize, ErrorCode>,
+    ) -> Result<(), ErrorCode>;
 
-    /// Retrieve second operand.
+    /// Supply the next bytes of the second operand `b`.
     ///
-    /// Only called for operations that take two operands. The client fills all
-    /// of `num` with the next `num.len()` bytes of `b`. The driver may call this
-    /// several times, but requests exactly `modulus_len` bytes in total.
-    fn read_second_number(&self, num: &mut [u8]);
+    /// Only called for operations that take two operands. The driver may call
+    /// this several times; in total it consumes exactly `modulus_len` bytes.
+    fn read_second_number(
+        &self,
+        sink: &mut dyn FnMut(&ReadableProcessSlice) -> Result<usize, ErrorCode>,
+    ) -> Result<(), ErrorCode>;
 
-    /// Return operation result.
+    /// Receive the next bytes of the result.
     ///
-    /// Only called if the computation succeeded. The driver may call this
-    /// several times, and delivers exactly `modulus_len` bytes in total before
-    /// calling [`computation_completed`](Self::computation_completed) with
-    /// `Ok(())`.
-    ///
-    /// Returning an error aborts the operation; see
-    /// [`computation_completed`](Self::computation_completed).
-    fn write_number(&self, num: &[u8]) -> Result<(), ErrorCode>;
+    /// Only called if the computation succeeded, after the driver has consumed
+    /// all input. The driver may call this several times; in total it writes
+    /// exactly `modulus_len` bytes before calling
+    /// [`computation_completed`](Self::computation_completed) with `Ok(())`.
+    fn write_number(
+        &self,
+        source: &mut dyn FnMut(&WriteableProcessSlice) -> Result<usize, ErrorCode>,
+    ) -> Result<(), ErrorCode>;
 
     /// Signal completion of an arithmetic operation.
     ///
@@ -134,25 +169,24 @@ pub trait MathClient<Op> {
     /// [`write_number`](Self::write_number). On `Err`, any result bytes already
     /// delivered are invalid and must be discarded.
     ///
-    /// If [`read_modulus`](Self::read_modulus) or
-    /// [`write_number`](Self::write_number) returns an error, the driver issues
-    /// no further data callbacks for that operation and passes that same error
-    /// here.
+    /// If any data callback returns an error, the driver immediately aborts the
+    /// operation, issues no further data callbacks for it, and passes that same
+    /// error here.
     fn computation_completed(&self, result: Result<(), ErrorCode>);
 }
 
 /// Hardware-accelerated modular arithmetic.
 ///
-/// See the [module documentation](self) for the data format and the supported
-/// operations.
+/// See the [module documentation](self) for the data format, data movement and
+/// the supported operations.
 pub trait ModularArithmetic<'a, Op> {
-    /// Set the `Client` client to be called on completion.
+    /// Set the client that will receive callbacks for operations.
     fn set_client(&self, client: &'a dyn MathClient<Op>);
 
     /// Start an operation on numbers of `modulus_len` bytes.
     ///
-    /// The modulus and operands are read through [`MathClient`] callbacks. No
-    /// callback is issued from within this call.
+    /// The modulus and operands are read through [`MathClient`] callbacks.
+    /// Callbacks must not occur before this method returns.
     ///
     /// On `Ok(())`, exactly one [`MathClient::computation_completed`] callback
     /// follows. If the operation succeeds, the result is delivered first as
@@ -161,6 +195,7 @@ pub trait ModularArithmetic<'a, Op> {
     /// # Errors
     ///
     /// - [`ErrorCode::BUSY`]: another operation is in progress.
+    /// - [`ErrorCode::RESERVE`]: no client is registered.
     /// - [`ErrorCode::SIZE`]: `modulus_len` is zero or not supported by the
     ///   driver.
     /// - [`ErrorCode::NOSUPPORT`]: `operation` is not supported by the driver.
