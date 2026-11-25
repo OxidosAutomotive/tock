@@ -371,7 +371,10 @@ impl<H: crypto::digest::Hmac> Hkdf<H> {
             } else {
                 self.salt_offset.set(updated_offset);
             }
-            self.key_state.map_or(None, |key_state| key_state.update());
+            match self.key_state.take().and_then(KeyState::update) {
+                Some(next) => self.key_state.set(next),
+                None => {}
+            }
             Ok(read)
         } else {
             Err(ErrorCode::ALREADY)
@@ -667,6 +670,7 @@ impl<H: crypto::digest::Hmac> Client for Hkdf<H> {
                 match stage {
                     Stage::Extract => {
                         self.prk_offset.take();
+                        self.key_state.set(KeyState::InnerKey);
                         self.state.set(State::Active {
                             stage: Stage::Expand {
                                 iteration: 1,
